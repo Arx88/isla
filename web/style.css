@@ -24,6 +24,10 @@ html, body { height: 100%; overflow: hidden; background: var(--sea); color: var(
 .ce-name { font-weight: 700; }
 .card-edit textarea { width: 100%; height: 92px; background: var(--sea); color: var(--ink);
   border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 12px; line-height: 1.45; resize: vertical; font-family: var(--font); }
+.ce-opts { display: flex; gap: 6px; margin-bottom: 8px; }
+.ce-opts select { flex: 1; background: var(--sea); color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
+  padding: 5px 4px; font-size: 11.5px; cursor: pointer; }
+.ce-opts select:focus { outline: 1px solid var(--accent); }
 .card-edit textarea:focus { outline: 1px solid var(--accent); }
 .intro-controls { display: flex; gap: 14px; align-items: center; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
 .seedbox { color: var(--ink2); font-size: 13px; display: flex; gap: 8px; align-items: center; }

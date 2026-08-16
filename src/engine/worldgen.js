@@ -58,6 +58,7 @@ export function generateWorld(seed, opts = {}) {
 
   // rios (varios, desde picos distintos) + cataratas donde caen en desnivel
   const waterfalls = [];
+  const flow = new Map(); // idx -> {fx, fy} direccion de corriente
   const carveRiver = (sx, sy) => {
     let rx = sx, ry = sy, steps = 0, lastE = emap[idx(rx, ry)], stuck = 0, mx = 0, my = 1;
     const seen = new Set([idx(rx, ry)]);
@@ -66,8 +67,6 @@ export function generateWorld(seed, opts = {}) {
       const here = emap[idx(rx, ry)];
       if (lastE - here > 0.045 && here > 0.32) waterfalls.push({ x: rx, y: ry }); // catarata!
       lastE = here;
-      if (hash2(rx, ry, seed + 7) > 0.6 && rx + 1 < w && !isSalt(biome[idx(rx + 1, ry)])) { biome[idx(rx + 1, ry)] = BIOME.RIVER; seen.add(idx(rx + 1, ry)); }
-      // elegir vecino: minimizar altura + impulso + ruido; tolerar subidas cortas para no trabarse
       let best = null, bs = 1e9;
       for (const [ddx, ddy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
         const nx = rx + ddx, ny = ry + ddy;
@@ -82,6 +81,9 @@ export function generateWorld(seed, opts = {}) {
       const b = biome[idx(nx, ny)];
       if (isSalt(b)) break;
       if (emap[idx(nx, ny)] > here + 0.02) stuck++; else stuck = 0;
+      const fl = Math.hypot(nx - rx, ny - ry) || 1;
+      flow.set(idx(rx, ry), { fx: (nx - rx) / fl, fy: (ny - ry) / fl });
+      if (hash2(rx, ry, seed + 7) > 0.6 && rx + 1 < w && !isSalt(biome[idx(rx + 1, ry)])) { biome[idx(rx + 1, ry)] = BIOME.RIVER; flow.set(idx(rx + 1, ry), { fx: (nx - rx) / fl, fy: (ny - ry) / fl }); seen.add(idx(rx + 1, ry)); }
       mx = mx * 0.7 + (nx - rx) * 0.3; my = my * 0.7 + (ny - ry) * 0.3;
       seen.add(idx(nx, ny));
       rx = nx; ry = ny;
@@ -157,7 +159,7 @@ export function generateWorld(seed, opts = {}) {
 
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
     const b = biome[idx(x, y)], r = hash2(x, y, seed + 11);
-    if (b === BIOME.RIVER) addRes(world.waterSources, x, y, { kind: 'rio' });
+    if (b === BIOME.RIVER) { const f = flow.get(idx(x, y)); addRes(world.waterSources, x, y, f ? { kind: 'rio', fx: f.fx, fy: f.fy } : { kind: 'rio', fx: 0, fy: 1 }); }
     else if (b === BIOME.SWAMPW) addRes(world.waterSources, x, y, { kind: 'pantano', sickChance: 0.45 });
     else if (b === BIOME.SHAL && hash2(x, y, seed + 21) > 0.88) addRes(world.fishZones, x, y, {});
     else if ((b === BIOME.MEADOW || b === BIOME.GRASS || b === BIOME.FOREST) && fertile[idx(x, y)] && r > 0.82) addRes(world.bushes, x, y, { amount: 2, max: 2 }); // los arbustos quieren tierra rica

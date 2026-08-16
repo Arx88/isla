@@ -8,7 +8,7 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
 
 let map = null, snap = null, snapAt = 0;
 let chunks = new Map();          // cache de chunks de terreno (LRU)
-let coastEdges = [], waterTiles = [], miniBase = null;
+let coastEdges = [], waterTiles = [], riverTiles = [], miniBase = null;
 let cam = { x: 200, y: 100, zoom: 30, follow: null };
 let dragging = null, lastFrame = performance.now(), rainDrops = [];
 let clouds = [], birds = [], flashUntil = 0;
@@ -160,7 +160,10 @@ function getChunk(cxc, cyc) {
 // ============ preparacion al recibir el mapa ============
 function prepareWorld() {
   chunks = new Map();
-  coastEdges = []; waterTiles = [];
+  coastEdges = []; waterTiles = []; riverTiles = [];
+  for (const ws of map.water || []) {
+    if (ws.k === 'rio') riverTiles.push({ x: ws.x, y: ws.y, fx: ws.fx || 0, fy: ws.fy || 1, h: hash2(ws.x, ws.y, 21) });
+  }
   const w = map.w, h = map.h;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const b = map.biome[y * w + x];
@@ -288,16 +291,46 @@ function frame(now) {
     }
   }
 
-  // recursos
-  for (const tr of map.trees) if (tr.a > 0 && inView(tr.x, tr.y, 3)) drawTree(tr, z, cx, cy, now);
-  for (const b of map.bushes) if (b.a > 0 && inView(b.x, b.y)) drawBush(b, z, cx, cy, now);
-  for (const s of map.stones) if (s.a > 0 && inView(s.x, s.y)) drawStone(s, z, cx, cy, now);
-  for (const g of map.graves) if (inView(g.x, g.y)) drawGrave(g.x * z + cx, g.y * z + cy, z);
+  // rios: la corriente FLUYE en su direccion (fx,fy) — guinas que viajan rio abajo
+  for (const rt of riverTiles) {
+    if (!inView(rt.x, rt.y)) continue;
+    const px = rt.x * z + cx, py = rt.y * z + cy;
+    const horiz = Math.abs(rt.fx) > Math.abs(rt.fy);
+    for (let k = 0; k < 2; k++) {
+      const prog = ((now / 420 + rt.h * 30 + k * z * 0.45) % (z * 0.9)) - z * 0.2;
+      const gx = px + z * .2 + rt.fx * prog, gy = py + z * .4 + rt.fy * prog;
+      ctx.fillStyle = k ? 'rgba(210,240,250,.55)' : 'rgba(255,255,255,.4)';
+      if (horiz) ctx.fillRect(gx, gy, z * .32, Math.max(1, z * .06));
+      else ctx.fillRect(gx, gy, Math.max(1, z * .06), z * .32);
+    }
+    // espuma ocasional en las piedras del rio
+    if (rt.h > 0.93) {
+      const foam = 0.4 + Math.sin(now / 300 + rt.h * 40) * 0.35;
+      ctx.fillStyle = `rgba(255,255,255,${foam})`;
+      ctx.fillRect(px + z * .3, py + z * .35, z * .14, z * .1);
+    }
+  }
 
-  drawBuildings(z, cx, cy, now);
-
-  // fauna
-  for (const a of snap.animals || []) if (inView(a.x, a.y)) drawAnimal(a, z, cx, cy, now);
+  // ===== dibujar con ORDEN POR PROFUNDIDAD (nadie camina sobre arboles) =====
+  zG = z;
+  const sortables = [];
+  for (const tr of map.trees) if (tr.a > 0 && inView(tr.x, tr.y, 3)) sortables.push({ y: tr.y + 0.95, draw: () => drawTree(tr, z, cx, cy, now) });
+  for (const b of map.bushes) if (b.a > 0 && inView(b.x, b.y)) sortables.push({ y: b.y + 0.9, draw: () => drawBush(b, z, cx, cy, now) });
+  for (const s of map.stones) if (s.a > 0 && inView(s.x, s.y)) sortables.push({ y: s.y + 0.85, draw: () => drawStone(s, z, cx, cy, now) });
+  for (const a of snap.animals || []) if (inView(a.x, a.y)) sortables.push({ y: a.y + 0.7, draw: () => drawAnimal(a, z, cx, cy, now) });
+  const Bsh = map.buildings.shelter, Bal = map.buildings.altar;
+  if (Bsh.progress > 0) sortables.push({ y: Bsh.y + 1.1, draw: () => drawShelter(Bsh, z, cx, cy, now) });
+  if (Bal.progress > 0) sortables.push({ y: Bal.y + 1.1, draw: () => drawAltar(Bal, z, cx, cy, now) });
+  for (const g of map.graves) if (inView(g.x, g.y)) sortables.push({ y: g.y + 0.9, draw: () => drawGrave(g.x * z + cx, g.y * z + cy, z) });
+  for (const c of snap.citizens) {
+    if (!inView(c.x, c.y) || !c.alive) continue;
+    const x = (c.px + (c.x - c.px) * t) * z + cx;
+    const y = (c.py + (c.y - c.py) * t) * z + cy;
+    sortables.push({ y: c.y + 0.98, draw: () => drawSurvivor(x, y, z, c, now) });
+  }
+  sortables.sort((p, q) => p.y - q.y);
+  for (const s of sortables) s.draw();
+  drawFire(z, cx, cy, now);
 
   // pajaros
   for (const b of birds) {
@@ -312,14 +345,8 @@ function frame(now) {
     ctx.fillRect(fx + z * .06, fy - (up ? 0 : z * .18), z * .36, z * .14);
   }
 
-  // ciudadanos
+  // ciudadanos: posiciones globales para huellas
   cxG = cx; cyG = cy;
-  for (const c of snap.citizens) {
-    if (!inView(c.x, c.y) || !c.alive) continue;
-    const x = (c.px + (c.x - c.px) * t) * z + cx;
-    const y = (c.py + (c.y - c.py) * t) * z + cy;
-    drawSurvivor(x, y, z, c, now);
-  }
   for (const c of snap.citizens) {
     if (!c.alive || !c.say) continue;
     const x = (c.px + (c.x - c.px) * t) * z + cx, y = (c.py + (c.y - c.py) * t) * z + cy;
@@ -341,7 +368,21 @@ function frame(now) {
   drawWeather(now, dt);
   drawDayNight();
   if (snap.raining) drawRain(dt, snap.weather === 'storm' ? 2 : 1);
+  drawVignette();
   drawMinimap();
+}
+
+// viñeta suave: la magia esta en los bordes oscuros
+let vignette = null, vigW = 0, vigH = 0;
+function drawVignette() {
+  if (!vignette || vigW !== canvas.width || vigH !== canvas.height) {
+    vigW = canvas.width; vigH = canvas.height;
+    vignette = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) * .42,
+      canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * .72);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(8,12,28,.35)');
+  }
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
 function resize() {
@@ -350,62 +391,86 @@ function resize() {
   if (canvas.width !== (r.width * dpr | 0)) { canvas.width = r.width * dpr | 0; canvas.height = r.height * dpr | 0; }
 }
 
-// ============ arboles con variantes por instancia ============
+// ============ arboles pixel-art: grilla de pixel + racimos con hojas ============
 const TREE_GREENS = [
-  ['#245c2a', '#347436', '#46884a'], ['#1d5230', '#2c6a3a', '#3d8046'],
-  ['#2c6024', '#3f7c34', '#54a044'], ['#1a5234', '#2a6842', '#3c8252'],
+  ['#245c2a', '#347436', '#4e9a50', '#6cba62'], ['#1d5230', '#2c6a3a', '#42904a', '#62b068'],
+  ['#2c6024', '#3f7c34', '#58a044', '#78c058'], ['#1a5234', '#2a6842', '#40885a', '#60a878'],
 ];
+let zG = 30;
+function PP(x, y, w, h, col) {
+  const g = Math.max(1, Math.round(zG / 16));
+  ctx.fillStyle = col;
+  ctx.fillRect(Math.round(x / g) * g, Math.round(y / g) * g, Math.max(g, Math.round(w / g) * g), Math.max(g, Math.round(h / g) * g));
+}
+// un racimo de copa: sombra + cuerpo + luz + hojitas sueltas (pixel-art de verdad)
+function leafCluster(cx0, cy0, r, pal, sway, v) {
+  PP(cx0 - r * .7, cy0 - r * .45, r * 1.4, r * .95, pal[0]);            // sombra inferior
+  PP(cx0 - r * .8 + sway, cy0 - r * .8, r * 1.6, r * 1.1, pal[1]);       // cuerpo
+  PP(cx0 - r * .55 + sway, cy0 - r * 1.05, r * 1.15, r * .8, pal[2]);    // luz
+  PP(cx0 - r * .25 + sway, cy0 - r * 1.15, r * .6, r * .45, pal[3]);     // brillo
+  // hojitas pixeladas en el borde (dentado organico)
+  PP(cx0 - r * .95, cy0 - r * .35, r * .3, r * .3, pal[1]);
+  PP(cx0 + r * .68, cy0 - r * .5, r * .3, r * .3, pal[2]);
+  PP(cx0 - r * .1, cy0 - r * 1.35, r * .25, r * .25, pal[2]);
+  PP(cx0 + r * .3, cy0 - r * .95, r * .2, r * .2, pal[3]);
+  PP(cx0 - r * .55, cy0 - r * 1.3, r * .2, r * .2, pal[3]);
+}
 function drawTree(tr, z, cx, cy, now) {
   const x = tr.x * z + cx, y = tr.y * z + cy;
   const b = B(tr.x, tr.y);
   const v = hash2(tr.x * 3.7, tr.y * 7.3, 5);
-  const s = 0.85 + v * 0.4;                    // escala unica por arbol
-  const [d1, d2, d3] = TREE_GREENS[(v * 4) | 0]; // paleta unica por arbol
+  const s = 0.85 + v * 0.4;
+  const pal = TREE_GREENS[(v * 4) | 0];
   const lean = (hash2(tr.x, tr.y, 9) - 0.5) * z * 0.12;
   const sway = Math.sin(now / 900 + tr.x * 0.7 + v * 6) * z * 0.05 * (0.7 + v * 0.6);
   ctx.fillStyle = 'rgba(0,0,0,.22)';
   ctx.beginPath(); ctx.ellipse(x + z / 2 + lean, y + z * .9, z * .44 * s, z * .15, 0, 0, 7); ctx.fill();
+  const H = z / 2; // centro del tile
   if (b === BIOME.JUNGLE) {
-    ctx.fillStyle = '#6d4c41'; ctx.fillRect(x + z * .42 + lean, y + z * .1, z * .16 * s, z * .85);
-    ctx.fillStyle = d1; ctx.fillRect(x - z * .3 * s + sway + lean, y - z * .6 * s, z * 1.6 * s, z * .6 * s);
-    ctx.fillStyle = d2; ctx.fillRect(x - z * .17 * s + sway + lean, y - z * .9 * s, z * 1.34 * s, z * .58 * s);
-    ctx.fillStyle = d3; ctx.fillRect(x - z * .03 * s, y - z * 1.1 * s, z * 1.06 * s, z * .46 * s);
-    ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(x + z * .2 * s, y - z * 1.02 * s, z * .44 * s, z * .2 * s);
-    ctx.fillStyle = '#4a8a3c'; ctx.fillRect(x - z * .12 * s + sway, y - z * .5 * s, 2, z * .5 * s); // liana
-    if (v > 0.6) { ctx.fillStyle = d1; ctx.fillRect(x - z * .36 * s + sway, y - z * .34 * s, z * .34 * s, z * .2 * s); } // rama extra
+    PP(x + H * .78 + lean, y + z * .1, H * .34 * s, z * .85, '#6d4c41');   // tronco
+    PP(x + H * .74 + lean, y + z * .1, H * .12 * s, z * .85, '#55382c');
+    leafCluster(x + H + lean, y - z * .18 * s, z * .52 * s, pal, sway, v); // 3 pisos de selva
+    leafCluster(x + H - z * .3 * s + lean, y + z * .08 * s, z * .38 * s, pal, sway * .8, v);
+    leafCluster(x + H + z * .3 * s + lean, y + z * .02 * s, z * .4 * s, pal, sway * 1.2, v);
+    PP(x + H - z * .18 * s, y - z * .1, z * .05, z * .45, '#4a8a3c');      // lianas
+    PP(x + H + z * .22 * s, y - z * .05, z * .05, z * .38, '#4a8a3c');
   } else if (b === BIOME.PINE) {
-    ctx.fillStyle = '#5a4436'; ctx.fillRect(x + z * .42, y + z * .4, z * .16 * s, z * .55);
-    for (let k = 0; k < 3; k++) {
-      ctx.fillStyle = k === 0 ? d1 : k === 1 ? d2 : d3;
-      const wdt = z * (1.3 - k * 0.28) * s, hgt = z * .48 * s;
-      ctx.beginPath();
-      ctx.moveTo(x - wdt / 2 + sway * (k + 1) * 0.4, y - z * (.1 + k * .38) * s);
-      ctx.lineTo(x + sway * (k + 1) * 0.4, y - z * (.1 + k * .38 + .5) * s);
-      ctx.lineTo(x + wdt / 2 + sway * (k + 1) * 0.4, y - z * (.1 + k * .38) * s);
-      ctx.closePath(); ctx.fill();
+    PP(x + H * .8, y + z * .35, H * .3, z * .6, '#5a4436');
+    // pino escalonado con borde dentado (nada de triangulo liso)
+    const tiers = 4;
+    for (let k = 0; k < tiers; k++) {
+      const tw = (z * (1.35 - k * 0.3)) * s, ty = y + z * .3 - (k * z * .38) * s, tx = x + H + sway * (k + 1) * 0.25;
+      const tp = [pal[0], pal[1], pal[2], pal[3]][k % 2 ? 1 : k === 3 ? 3 : 2] || pal[1];
+      PP(tx - tw / 2, ty - z * .34 * s, tw, z * .36 * s, tp);
+      PP(tx - tw / 2 + tw * .1, ty - z * .02 * s, tw * .12, z * .1 * s, pal[0]); // dientes
+      PP(tx + tw / 2 - tw * .25, ty, tw * .14, z * .12 * s, pal[0]);
+      PP(tx - tw * .08, ty - z * .4 * s, tw * .18, z * .1 * s, pal[3]);          // punta clara
     }
   } else if (b === BIOME.SAND) {
     const bend = (hash2(tr.x, tr.y, 13) - 0.5) * z * 0.5;
-    for (let i = 0; i < 6; i++) { ctx.fillStyle = i % 2 ? '#8a6644' : '#77563a'; ctx.fillRect(x + z * .3 + bend * (i / 6) + i * z * .04, y + z * .85 - i * z * .16, z * .14, z * .2); }
-    const bx = x + bend + sway;
-    ctx.fillStyle = '#3e9448';
-    ctx.fillRect(bx - z * .1, y - z * .38, z * 1.2 * s, z * .16);
-    ctx.fillRect(bx - z * .55, y - z * .17, z * .55 * s, z * .13);
-    ctx.fillRect(bx + z * .6, y - z * .17, z * .55 * s, z * .13);
-    ctx.fillRect(bx - z * .25, y - z * .28, z * .5, z * .13);
-    ctx.fillStyle = '#55b060'; ctx.fillRect(bx + z * .18, y - z * .52 * s, z * .68 * s, z * .14);
-    ctx.fillStyle = '#6d4c41'; ctx.fillRect(bx + z * .3, y - z * .3, z * .1, z * .1); ctx.fillRect(bx + z * .5, y - z * .3, z * .1, z * .1);
-  } else { // roble con variantes
-    ctx.fillStyle = v > 0.75 ? '#5d4232' : '#6d4c41';
-    ctx.fillRect(x + z * .4 + lean, y + z * .2, z * .2 * s, z * .7);
-    if (v < 0.2) { ctx.fillStyle = '#6d4c41'; ctx.fillRect(x + z * .55, y + z * .05, z * .3, z * .07); } // rama
-    ctx.fillStyle = d1; ctx.fillRect(x - z * .32 * s + sway + lean, y - z * .58 * s, z * 1.64 * s, z * .78 * s);
-    ctx.fillStyle = d2; ctx.fillRect(x - z * .19 * s + sway + lean, y - z * .9 * s, z * 1.38 * s, z * .62 * s);
-    ctx.fillStyle = d3; ctx.fillRect(x - z * .05 * s + sway * .6 + lean, y - z * 1.12 * s, z * 1.12 * s, z * .48 * s);
-    ctx.fillStyle = 'rgba(255,255,255,.15)'; ctx.fillRect(x + z * .16 * s + lean, y - z * 1.04 * s, z * .5 * s, z * .2 * s);
-    if (v > 0.55 && v < 0.7) { // frutos
-      ctx.fillStyle = '#d8544a';
-      ctx.fillRect(x + z * .1, y - z * .5 * s, z * .12, z * .12); ctx.fillRect(x + z * .7, y - z * .62 * s, z * .12, z * .12);
+    for (let i = 0; i < 6; i++) PP(x + H * .55 + bend * (i / 6) + i * H * .1, y + z * .85 - i * z * .16, H * .3, z * .2, i % 2 ? '#8a6644' : '#77563a');
+    const bx = x + H + bend + sway, by = y - z * .3;
+    // frondas: abanico de segmentos escalonados con puntas
+    for (let k = -2; k <= 2; k++) {
+      const fw = z * .34 * s, fx2 = bx + k * fw * .55, droop = Math.abs(k) * z * .1;
+      PP(fx2 - fw / 2, by - z * .12 + droop, fw, z * .14, '#3e9448');
+      PP(fx2 - fw / 2, by - z * .12 + droop, fw * .6, z * .14, '#55b060');
+      PP(fx2 - fw * .1 + Math.sign(k) * fw * .3, by - z * .1 + droop, fw * .2, z * .1, '#3e9448');
+    }
+    PP(bx - z * .1, by - z * .28, z * .2, z * .12, '#55b060');
+    PP(bx + H * .3, by + z * .05, H * .2, H * .2, '#6d4c41'); PP(bx + H * .7, by + z * .05, H * .2, H * .2, '#6d4c41'); // cocos
+  } else { // roble: tronco con raices + racimos de copa
+    PP(x + H * .72 + lean, y + z * .15, H * .38 * s, z * .75, '#6d4c41');
+    PP(x + H * .72 + lean, y + z * .15, H * .14 * s, z * .75, '#55382c');
+    PP(x + H * .6 + lean, y + z * .82, H * .24, z * .1, '#55382c');       // raiz izq
+    PP(x + H * .92 + lean, y + z * .82, H * .24, z * .1, '#55382c');      // raiz der
+    leafCluster(x + H + lean, y - z * .28 * s, z * .48 * s, pal, sway, v);        // racimo central
+    leafCluster(x + H - z * .34 * s + lean, y - z * .02 * s, z * .32 * s, pal, sway * .8, v); // izq
+    leafCluster(x + H + z * .34 * s + lean, y + z * .02 * s, z * .34 * s, pal, sway * 1.25, v); // der
+    if (v > 0.55 && v < 0.72) { // frutos rojos
+      PP(x + H - z * .1, y - z * .3 * s, z * .09, z * .09, '#d8544a');
+      PP(x + H + z * .24, y - z * .42 * s, z * .09, z * .09, '#d8544a');
+      PP(x + H + z * .05, y - z * .55 * s, z * .09, z * .09, '#d8544a');
     }
   }
 }
@@ -446,42 +511,63 @@ function drawGrave(x, y, z) {
   ctx.fillStyle = '#7c828d'; ctx.fillRect(x + z * .16, y + z * .78, z * .68, z * .16);
   ctx.fillStyle = '#4a5058'; ctx.fillRect(x + z * .42, y + z * .2, z * .16, z * .4); ctx.fillRect(x + z * .32, y + z * .3, z * .36, z * .14);
 }
-function drawBuildings(z, cx, cy, now) {
-  const Bb = map.buildings, S = Bb.shelter, A = Bb.altar;
-  if (S.progress > 0) {
-    const x = S.x * z + cx, y = S.y * z + cy, done = S.done, p = S.progress / S.needed;
-    ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * 1.1, z * .9, z * .25, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = done ? '#a97c50' : '#6e523a'; ctx.fillRect(x - z * .25, y - z * .1, z * 1.5, z * 1.1);
-    ctx.fillStyle = done ? '#c99c68' : '#7d5f44'; ctx.fillRect(x - z * .12, y + z * .05, z * 1.25, z * .7);
-    ctx.fillStyle = '#3c2e20'; ctx.fillRect(x + z * .3, y + z * .25, z * .4, z * .65);
-    const rh = done ? z * 0.95 : z * (0.3 + p * 0.6);
-    ctx.fillStyle = done ? '#4a8f3c' : '#3c6e34';
-    ctx.beginPath(); ctx.moveTo(x - z * .5, y - z * .1); ctx.lineTo(x + z * .5, y - rh - z * .1); ctx.lineTo(x + z * 1.5, y - z * .1); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = done ? '#5aa848' : '#4a8a40';
-    ctx.beginPath(); ctx.moveTo(x - z * .2, y - rh * .55 - z * .1); ctx.lineTo(x + z * .5, y - rh - z * .1); ctx.lineTo(x + z * 1.2, y - rh * .55 - z * .1); ctx.closePath(); ctx.fill();
-    if (!done) { ctx.fillStyle = '#ffd54f'; ctx.font = `${Math.max(8, z * .3) | 0}px monospace`; ctx.fillText(`${Math.round(p * 100)}%`, x, y - z * .2); }
-  }
-  if (A.progress > 0) {
-    const x = A.x * z + cx, y = A.y * z + cy, done = A.done;
-    ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * .95, z * .62, z * .18, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = '#6d675c'; ctx.fillRect(x + z * .05, y - z * .15, z * .9, z);
-    ctx.fillStyle = '#8a8274'; ctx.fillRect(x + z * .12, y + z * .6, z * .76, z * .3);
-    ctx.fillStyle = '#9c948a'; ctx.fillRect(x + z * .2, y - z * .05, z * .6, z * .4);
-    if (done) {
-      const pulse = 0.5 + Math.sin(now / 400) * 0.3;
-      ctx.fillStyle = `rgba(80,220,255,${0.18 + pulse * 0.2})`;
-      ctx.beginPath(); ctx.arc(x + z * .5, y - z * .45, z * (0.9 + pulse * .15), 0, 7); ctx.fill();
-      ctx.font = `${(z * .75) | 0}px monospace`; ctx.fillStyle = `rgba(180,250,255,${0.55 + pulse * 0.45})`;
-      ctx.fillText('Ω', x + z * .24, y - z * .12);
+function drawShelter(S, z, cx, cy, now) {
+  const x = S.x * z + cx, y = S.y * z + cy, done = S.done, p = S.progress / S.needed;
+  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * 1.1, z * .9, z * .25, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = done ? '#a97c50' : '#6e523a'; ctx.fillRect(x - z * .25, y - z * .1, z * 1.5, z * 1.1);
+  ctx.fillStyle = done ? '#c99c68' : '#7d5f44'; ctx.fillRect(x - z * .12, y + z * .05, z * 1.25, z * .7);
+  ctx.fillStyle = '#3c2e20'; ctx.fillRect(x + z * .3, y + z * .25, z * .4, z * .65);
+  const rh = done ? z * 0.95 : z * (0.3 + p * 0.6);
+  // techo a dos aguas con textura de paja (lineas)
+  ctx.fillStyle = done ? '#4a8f3c' : '#3c6e34';
+  ctx.beginPath(); ctx.moveTo(x - z * .5, y - z * .1); ctx.lineTo(x + z * .5, y - rh - z * .1); ctx.lineTo(x + z * 1.5, y - z * .1); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = done ? '#5aa848' : '#4a8a40';
+  ctx.beginPath(); ctx.moveTo(x - z * .2, y - rh * .55 - z * .1); ctx.lineTo(x + z * .5, y - rh - z * .1); ctx.lineTo(x + z * 1.2, y - rh * .55 - z * .1); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.lineWidth = 1;
+  for (let k = 1; k < 4; k++) { ctx.beginPath(); ctx.moveTo(x - z * .5 + (k * z * .5) / 4, y - z * .1 - (rh * k) / 8); ctx.lineTo(x + z * .2 + (k * z * .4) / 4, y - rh * .82); ctx.stroke(); }
+  if (!done) { ctx.fillStyle = '#ffd54f'; ctx.font = `${Math.max(8, z * .3) | 0}px monospace`; ctx.fillText(`${Math.round(p * 100)}%`, x, y - z * .2); }
+}
+function drawAltar(A, z, cx, cy, now) {
+  const x = A.x * z + cx, y = A.y * z + cy, done = A.done;
+  ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * .95, z * .62, z * .18, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#6d675c'; ctx.fillRect(x + z * .05, y - z * .15, z * .9, z);
+  ctx.fillStyle = '#8a8274'; ctx.fillRect(x + z * .12, y + z * .6, z * .76, z * .3);
+  ctx.fillStyle = '#9c948a'; ctx.fillRect(x + z * .2, y - z * .05, z * .6, z * .4);
+  if (done) {
+    const pulse = 0.5 + Math.sin(now / 400) * 0.3;
+    ctx.fillStyle = `rgba(80,220,255,${0.18 + pulse * 0.2})`;
+    ctx.beginPath(); ctx.arc(x + z * .5, y - z * .45, z * (0.9 + pulse * .15), 0, 7); ctx.fill();
+    // chispas que suben del altar
+    for (let k = 0; k < 3; k++) {
+      const s = (now / 700 + k * 0.33) % 1;
+      ctx.fillStyle = `rgba(150,240,255,${0.7 * (1 - s)})`;
+      ctx.fillRect(x + z * (.3 + k * .2) + Math.sin(now / 300 + k) * 3, y - z * .2 - s * z * .9, 2, 2);
     }
+    ctx.font = `${(z * .75) | 0}px monospace`; ctx.fillStyle = `rgba(180,250,255,${0.55 + pulse * 0.45})`;
+    ctx.fillText('Ω', x + z * .24, y - z * .12);
   }
+}
+function drawFire(z, cx, cy, now) {
   const fx = map.camp.x * z + cx, fy = map.camp.y * z + cy + z * .7;
+  // halo calido grande (acogedor)
+  const glow = 0.5 + Math.sin(now / 90) * 0.12 + Math.sin(now / 37) * 0.05;
+  const grad = ctx.createRadialGradient(fx, fy - z * .2, 0, fx, fy - z * .2, z * 2.6);
+  grad.addColorStop(0, `rgba(255,150,50,${0.22 * glow})`);
+  grad.addColorStop(0.5, `rgba(255,120,30,${0.1 * glow})`);
+  grad.addColorStop(1, 'rgba(255,120,30,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(fx - z * 2.6, fy - z * 2.6, z * 5.2, z * 5.2);
   ctx.fillStyle = '#5a4634'; ctx.fillRect(fx - z * .35, fy, z * .7, z * .15);
   ctx.fillStyle = '#4a3828'; ctx.fillRect(fx - z * .25, fy - z * .08, z * .5, z * .1);
-  const fl = Math.sin(now / 85) * z * .08;
-  ctx.fillStyle = 'rgba(255,120,20,.16)'; ctx.beginPath(); ctx.arc(fx, fy - z * .2, z * 1.5 + fl * 3, 0, 7); ctx.fill();
+  const fl = Math.sin(now / 85) * z * .08, fl2 = Math.sin(now / 60 + 2) * z * .05;
+  // chispas que suben
+  for (let k = 0; k < 3; k++) {
+    const sp = (now / 600 + k * 0.37) % 1;
+    ctx.fillStyle = `rgba(255,200,90,${0.8 * (1 - sp)})`;
+    ctx.fillRect(fx + Math.sin(now / 200 + k * 2) * z * .15, fy - z * .5 - sp * z * 1.2, 2, 2);
+  }
   ctx.fillStyle = '#ff8c1e'; ctx.fillRect(fx - z * .15, fy - z * .4 - fl, z * .3, z * .4 + fl);
-  ctx.fillStyle = '#ffc85a'; ctx.fillRect(fx - z * .08, fy - z * .3 - fl * .6, z * .16, z * .26);
+  ctx.fillStyle = '#ffc85a'; ctx.fillRect(fx - z * .08, fy - z * .3 - fl * .6 + fl2 * .3, z * .16, z * .26);
   ctx.fillStyle = '#fff3c0'; ctx.fillRect(fx - z * .03, fy - z * .16, z * .06, z * .1);
 }
 
@@ -539,21 +625,29 @@ function drawAnimal(a, z, cx, cy, now) {
   }
 }
 
-// ============ el sobreviviente (sin remera, con estados y caminata) ============
+// ============ el sobreviviente: apariencia configurable + poses por accion ============
 const SKINS = ['#e8be96', '#d9a06b', '#b97f52', '#8d5a35'];
+const HAIRS = ['#2c2320', '#4a3423', '#6e5238', '#1e1a18'];
 const trails = new Map();
 let lastTrailPush = 0;
 function drawSurvivor(x, y, z, c, now) {
-  const walk = c.action && ['explore', 'gather_wood', 'gather_stone', 'forage', 'fish', 'talk', 'drink'].includes(c.action);
-  const working = c.action && ['gather_wood', 'gather_stone', 'forage'].includes(c.action);
-  const sleeping = c.action === 'sleep';
-  const ph = sleeping ? 0 : walk ? Math.sin(now / 120 + x) : 0;
-  const bounce = walk ? Math.abs(Math.sin(now / 120 + x)) * z * 0.04 : Math.sin(now / 800 + x) * z * 0.015; // caminar rebota; idle respira
-  const skin = SKINS[(c.name.charCodeAt(0) + c.name.length) % SKINS.length];
-  const hair = ['#2c2320', '#4a3423', '#6e5238', '#1e1a18'][c.name.charCodeAt(c.name.length - 1) % 4];
-  const bearded = c.name.length % 2 === 0;
-  const lean = sleeping ? z * .28 : 0;
-  const yb = y - bounce;
+  const ap = c.appearance || { gender: 'm', skin: 0, hair: 'short' };
+  const female = ap.gender === 'f';
+  const act = c.action;
+  const walk = ['explore', 'gather_wood', 'gather_stone', 'forage', 'fish', 'talk', 'drink'].includes(act);
+  const working = ['gather_wood', 'gather_stone', 'forage'].includes(act);
+  const sleeping = act === 'sleep';
+  const praying = act === 'pray';
+  const fishing = act === 'fish';
+  const building = ['build_shelter', 'build_altar', 'craft'].includes(act);
+  const ph = sleeping || praying ? 0 : walk ? Math.sin(now / 120 + x) : 0;
+  const bounce = walk ? Math.abs(Math.sin(now / 120 + x)) * z * 0.04 : Math.sin(now / 800 + x) * z * 0.015;
+  const skin = SKINS[ap.skin != null ? ap.skin : (c.name.charCodeAt(0) + c.name.length) % 4];
+  const hairCol = HAIRS[(c.name.charCodeAt(c.name.length - 1)) % 4];
+  const longHair = female || ap.hair === 'long';
+  const fs = female ? 0.94 : 1; // ellas son apenas mas chicas de frame
+  const lean = sleeping ? z * .28 : praying ? z * .16 : 0;
+  const yb = y - bounce + lean;
 
   // huellas
   if (walk && now - lastTrailPush > 240) {
@@ -564,14 +658,14 @@ function drawSurvivor(x, y, z, c, now) {
     trails.set(c.id, arr);
   }
   const trail = trails.get(c.id);
-  if (trail) for (const h of trail) {
-    const age = (now - h.t) / 2000;
+  if (trail) for (const hh of trail) {
+    const age = (now - hh.t) / 2000;
     if (age > 1) continue;
     ctx.fillStyle = `rgba(60,50,40,${0.3 * (1 - age)})`;
-    ctx.fillRect(h.x * z + cxG - 1.5, h.y * z + cyG - 1.5, 3, 3);
+    ctx.fillRect(hh.x * z + cxG - 1.5, hh.y * z + cyG - 1.5, 3, 3);
   }
 
-  ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(x, y + z * .92, z * .32, z * .12, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(x, y + z * .92, z * .32 * fs, z * .12, 0, 0, 7); ctx.fill();
   if (c.needs.health < 40) {
     ctx.strokeStyle = `rgba(239,80,80,${0.4 + Math.sin(now / 200) * 0.3})`; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(x, y + z * .3, z * .8, 0, 7); ctx.stroke();
@@ -580,41 +674,110 @@ function drawSurvivor(x, y, z, c, now) {
   ctx.save();
   if (sleeping) { ctx.translate(x, y); ctx.rotate(0.9); ctx.translate(-x, -y); }
 
+  // piernas desnudas + shorts (con zancada)
+  const lw = (ph > 0 ? ph * z * .06 : 0), rw = (ph < 0 ? -ph * z * .06 : 0);
   ctx.fillStyle = skin;
-  ctx.fillRect(x - z * .24, yb + z * .42 - lean + ph * z * .07, z * .17, z * .48);
-  ctx.fillRect(x + z * .07, yb + z * .42 - lean - ph * z * .07, z * .17, z * .48);
+  ctx.fillRect(x - z * .24 * fs, yb + z * .42 + lw, z * .17 * fs, z * .48 - lw);
+  ctx.fillRect(x + z * .07 * fs, yb + z * .42 + rw, z * .17 * fs, z * .48 - rw);
   ctx.fillStyle = c.color;
-  ctx.fillRect(x - z * .3, yb + z * .34 - lean, z * .6, z * .26);
+  ctx.fillRect(x - z * .3 * fs, yb + z * .34, z * .6 * fs, z * .26);
   ctx.fillStyle = 'rgba(0,0,0,.25)';
-  ctx.fillRect(x - z * .3, yb + z * .52 - lean, z * .14, z * .06); ctx.fillRect(x + z * .1, yb + z * .55 - lean, z * .2, z * .05);
+  ctx.fillRect(x - z * .3 * fs, yb + z * .52, z * .14, z * .06);
+  ctx.fillRect(x + z * .1 * fs, yb + z * .55, z * .2, z * .05);
 
-  ctx.fillStyle = c.sick ? '#9dbd7a' : skin;
-  ctx.fillRect(x - z * .26, yb - z * .18 - lean, z * .52, z * .55);
-  ctx.fillStyle = 'rgba(0,0,0,.13)'; ctx.fillRect(x + z * .1, yb - z * .18 - lean, z * .16, z * .55);
-  ctx.fillStyle = 'rgba(120,80,50,.5)';
-  ctx.beginPath();
-  ctx.moveTo(x - z * .26, yb + z * .05 - lean); ctx.lineTo(x + z * .26, yb - z * .1 - lean);
-  ctx.lineTo(x + z * .26, yb + z * .02 - lean); ctx.lineTo(x - z * .26, yb + z * .17 - lean); ctx.closePath(); ctx.fill();
-
-  // brazos: al trabajar, el delantero golpea en arco
-  const armSwing = walk ? -ph * z * .1 : 0;
-  const chop = working ? Math.abs(Math.sin(now / 110)) * z * .16 : 0;
-  ctx.fillStyle = c.sick ? '#9dbd7a' : skin;
-  ctx.fillRect(x - z * .38, yb - z * .12 - lean + armSwing - chop * .3, z * .13, z * .42);
-  ctx.fillRect(x + z * .25, yb - z * .12 - lean - armSwing - chop, z * .13, z * .42);
-  if (working) { // herramienta en mano
-    ctx.strokeStyle = '#7a5a38'; ctx.lineWidth = Math.max(2, z * .08);
-    ctx.beginPath(); ctx.moveTo(x + z * .31, yb + z * .18 - chop); ctx.lineTo(x + z * .5, yb - z * .16 - chop); ctx.stroke();
-    if (c.action !== 'forage') { ctx.fillStyle = '#9aa1ad'; ctx.fillRect(x + z * .44, yb - z * .22 - chop, z * .14, z * .1); }
+  const bodyCol = c.sick ? '#9dbd7a' : skin;
+  if (female) {
+    // torso femenino: hombros, cintura, cadera
+    ctx.fillStyle = bodyCol;
+    ctx.fillRect(x - z * .24 * fs, yb - z * .18, z * .48 * fs, z * .3);          // hombros
+    ctx.fillRect(x - z * .2 * fs, yb + z * .1, z * .4 * fs, z * .14);            // cintura
+    ctx.fillRect(x - z * .23 * fs, yb + z * .22, z * .46 * fs, z * .14);         // cadera
+    ctx.fillStyle = 'rgba(0,0,0,.1)'; ctx.fillRect(x + z * .08 * fs, yb - z * .18, z * .16 * fs, z * .5);
+    ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(x - z * .08 * fs, yb + z * .04, z * .12, z * .1); // pecho sutil
+    ctx.fillStyle = 'rgba(120,80,50,.5)';                                          // correa
+    ctx.beginPath();
+    ctx.moveTo(x - z * .24 * fs, yb + z * .02); ctx.lineTo(x + z * .24 * fs, yb - z * .12);
+    ctx.lineTo(x + z * .24 * fs, yb - z * .0); ctx.lineTo(x - z * .24 * fs, yb + z * .14); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle = bodyCol;
+    ctx.fillRect(x - z * .26, yb - z * .18, z * .52, z * .55);
+    ctx.fillStyle = 'rgba(0,0,0,.13)'; ctx.fillRect(x + z * .1, yb - z * .18, z * .16, z * .55);
+    ctx.fillStyle = 'rgba(120,80,50,.5)';
+    ctx.beginPath();
+    ctx.moveTo(x - z * .26, yb + z * .05); ctx.lineTo(x + z * .26, yb - z * .1);
+    ctx.lineTo(x + z * .26, yb + z * .02); ctx.lineTo(x - z * .26, yb + z * .17); ctx.closePath(); ctx.fill();
   }
 
-  ctx.fillStyle = skin; ctx.fillRect(x - z * .17, yb - z * .58 - lean, z * .34, z * .42);
-  ctx.fillStyle = hair;
-  ctx.fillRect(x - z * .2, yb - z * .66 - lean, z * .4, z * .16);
-  ctx.fillRect(x - z * .22, yb - z * .56 - lean, z * .08, z * .2); ctx.fillRect(x + z * .14, yb - z * .56 - lean, z * .08, z * .22);
-  if (bearded) { ctx.fillStyle = hair; ctx.fillRect(x - z * .15, yb - z * .3 - lean, z * .3, z * .14); }
+  // brazos segun pose
+  const armSwing = walk ? -ph * z * .1 : 0;
+  let frontLift = 0, backLift = 0;
+  if (working) { frontLift = -Math.abs(Math.sin(now / 110)) * z * .16; }
+  else if (building) { frontLift = -Math.abs(Math.sin(now / 140)) * z * .3; }
+  else if (act === 'drink' || act === 'eat') { frontLift = -z * .22 - Math.sin(now / 260) * z * .05; }
+  else if (act === 'talk') { frontLift = -z * .1 - Math.max(0, Math.sin(now / 700)) * z * .12; }
+  else if (act === 'gift') { frontLift = -z * .14; }
+  else if (act === 'explore') { backLift = -z * .3; } // mano en la frente
+  ctx.fillStyle = bodyCol;
+  ctx.fillRect(x - z * .38 * fs, yb - z * .12 + armSwing + backLift, z * .13 * fs, z * .42);
+  ctx.fillRect(x + z * .25 * fs, yb - z * .12 - armSwing + frontLift, z * .13 * fs, z * .42);
+
+  // herramientas y accesorios por accion
+  if (working) {
+    const chop = Math.abs(Math.sin(now / 110));
+    ctx.strokeStyle = '#7a5a38'; ctx.lineWidth = Math.max(2, z * .08);
+    ctx.beginPath(); ctx.moveTo(x + z * .31, yb + z * .18 - chop * z * .16); ctx.lineTo(x + z * .5, yb - z * .16 - chop * z * .16); ctx.stroke();
+    if (act !== 'forage') PP(x + z * .44, yb - z * .24 - chop * z * .16, z * .14, z * .1, '#9aa1ad');
+    if (chop < 0.15) { PP(x + z * .5, yb + z * .1, z * .08, z * .08, '#ffe08a'); } // chispa del golpe
+  }
+  if (building) {
+    const swing = Math.abs(Math.sin(now / 140));
+    ctx.strokeStyle = '#7a5a38'; ctx.lineWidth = Math.max(2, z * .08);
+    ctx.beginPath(); ctx.moveTo(x + z * .3, yb - z * .3 + swing * z * .25); ctx.lineTo(x + z * .52, yb - z * .5 + swing * z * .25); ctx.stroke();
+    PP(x + z * .5, yb - z * .56 + swing * z * .25, z * .12, z * .1, '#9aa1ad');
+    if (swing > 0.9) { PP(x + z * .35, yb + z * .05, z * .07, z * .07, '#ffe08a'); PP(x + z * .55, yb + z * .02, z * .05, z * .05, '#fff'); } // golpecitos
+  }
+  if (fishing) {
+    const bob = Math.sin(now / 350) * z * .05;
+    ctx.strokeStyle = '#7a5a38'; ctx.lineWidth = Math.max(2, z * .07);
+    ctx.beginPath(); ctx.moveTo(x + z * .34, yb - z * .05); ctx.lineTo(x + z * .72, yb - z * .55); ctx.stroke(); // caña
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x + z * .72, yb - z * .55); ctx.lineTo(x + z * .72, yb + z * .35 + bob); ctx.stroke(); // linea
+    PP(x + z * .68, yb + z * .35 + bob, z * .09, z * .09, '#e85858');  // boyer rojo
+    PP(x + z * .68, yb + z * .3 + bob, z * .09, z * .05, '#fff');      // blanco
+  }
+  if (praying) {
+    // manos juntas + luz que sube
+    ctx.fillStyle = skin;
+    ctx.fillRect(x - z * .05, yb - z * .1, z * .1, z * .18);
+    const pglow = 0.4 + Math.sin(now / 300) * 0.3;
+    ctx.fillStyle = `rgba(160,230,255,${pglow * 0.5})`;
+    ctx.beginPath(); ctx.arc(x, yb - z * .1, z * .3, 0, 7); ctx.fill();
+    for (let k = 0; k < 2; k++) {
+      const s = (now / 800 + k * 0.5) % 1;
+      ctx.fillStyle = `rgba(200,245,255,${0.7 * (1 - s)})`;
+      ctx.fillRect(x + Math.sin(now / 250 + k * 3) * z * .12, yb - z * .3 - s * z * .7, 2, 2);
+    }
+  }
+
+  // cabeza
+  ctx.fillStyle = skin; ctx.fillRect(x - z * .17 * fs, yb - z * .58 * fs, z * .34 * fs, z * .42 * fs);
+  ctx.fillStyle = hairCol;
+  ctx.fillRect(x - z * .2 * fs, yb - z * .66 * fs, z * .4 * fs, z * .16);
+  if (longHair) { // pelo largo cae a los hombros (y a la espalda)
+    ctx.fillStyle = hairCol;
+    ctx.fillRect(x - z * .24 * fs, yb - z * .56 * fs, z * .08, z * .42);
+    ctx.fillRect(x + z * .16 * fs, yb - z * .56 * fs, z * .08, z * .42);
+    ctx.fillRect(x - z * .21 * fs, yb - z * .6 * fs, z * .42 * fs, z * .1);
+  } else {
+    ctx.fillRect(x - z * .22, yb - z * .56, z * .08, z * .2);
+    ctx.fillRect(x + z * .14, yb - z * .56, z * .08, z * .22);
+  }
+  if (!female && c.name.length % 2 === 0) { ctx.fillStyle = hairCol; ctx.fillRect(x - z * .15, yb - z * .3, z * .3, z * .14); } // barba
   ctx.fillStyle = '#241d18';
-  ctx.fillRect(x - z * .1, yb - z * .44 - lean, z * .05, z * .06); ctx.fillRect(x + z * .05, yb - z * .44 - lean, z * .05, z * .06);
+  ctx.fillRect(x - z * .1 * fs, yb - z * .44 * fs, z * .05, z * .06);
+  ctx.fillRect(x + z * .05 * fs, yb - z * .44 * fs, z * .05, z * .06);
+  if (female) { ctx.fillStyle = '#241d18'; ctx.fillRect(x - z * .12 * fs, yb - z * .46 * fs, z * .07, z * .02); ctx.fillRect(x + z * .05 * fs, yb - z * .46 * fs, z * .07, z * .02); } // pestanas
+  if (act === 'eat') { const chew = Math.sin(now / 180) * z * .015; ctx.fillStyle = skin; ctx.fillRect(x - z * .06, yb - z * .3 * fs + chew, z * .12, z * .04); } // mastica
   ctx.restore();
 
   if (sleeping) {
@@ -634,7 +797,7 @@ function drawSurvivor(x, y, z, c, now) {
 
   ctx.font = `600 ${Math.max(9, z * .34) | 0}px system-ui`; ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillText(c.name, x + 1, y + z * 1.32 + 1);
-  ctx.fillStyle = '#f2f6ff'; ctx.fillText(c.name, x, y + z * 1.32);
+  ctx.fillStyle = female ? '#ffd9ec' : '#f2f6ff'; ctx.fillText(c.name, x, y + z * 1.32);
   ctx.textAlign = 'left';
 }
 let cxG = 0, cyG = 0;
@@ -652,7 +815,7 @@ function drawBubble(x, y, text) {
 }
 
 // ============ vida ambiental: luciernagas, mariposas, hojas, motas, salpicaduras ============
-let fireflies = [], butterflies = [], windLeaves = [], heatMotes = [], splashes = [], meadowSpots = [];
+let fireflies = [], butterflies = [], windLeaves = [], heatMotes = [], splashes = [], meadowSpots = [], pollen = [];
 function initAmbient() {
   meadowSpots = [];
   for (let i = 0; i < 4000 && meadowSpots.length < 60; i++) {
@@ -661,6 +824,7 @@ function initAmbient() {
   }
   fireflies = []; for (let i = 0; i < 14; i++) fireflies.push({ x: map.camp.x + (Math.random() - .5) * 24, y: map.camp.y + (Math.random() - .5) * 18, ph: Math.random() * 9, wx: Math.random() * 9, wy: Math.random() * 9 });
   butterflies = []; for (let i = 0; i < 10; i++) { const s = meadowSpots.length ? meadowSpots[(Math.random() * meadowSpots.length) | 0] : { x: map.camp.x, y: map.camp.y }; butterflies.push({ hx: s.x, hy: s.y, x: s.x, y: s.y, ph: Math.random() * 9, hue: Math.random() * 360 }); }
+  pollen = []; for (let i = 0; i < 10; i++) { const s = meadowSpots.length ? meadowSpots[(Math.random() * meadowSpots.length) | 0] : { x: map.camp.x, y: map.camp.y }; pollen.push({ hx: s.x, hy: s.y, x: s.x, y: s.y, ph: Math.random() * 9 }); }
   windLeaves = []; heatMotes = []; splashes = [];
 }
 function tickAmbient(now, dt, z, cx, cy) {
@@ -690,6 +854,19 @@ function tickAmbient(now, dt, z, cx, cy) {
       ctx.fillRect(px - (flap ? 3.5 : 1.5), py - 2, flap ? 3.5 : 1.5, 4);
       ctx.fillRect(px, py - 2, flap ? 3.5 : 1.5, 4);
       ctx.fillStyle = '#2c2320'; ctx.fillRect(px - 0.75, py - 2, 1.5, 4);
+    }
+  }
+  // polen dorado flotando sobre los campos de flores (dia tranquilo)
+  if (!night && (snap.weather === 'clear' || snap.weather === 'cloudy')) {
+    for (const p of pollen) {
+      p.x += Math.sin(now / 1100 + p.ph) * 0.008; p.y += Math.cos(now / 1300 + p.ph * 2) * 0.006 - 0.002;
+      if (Math.hypot(p.x - p.hx, p.y - p.hy) > 5) { p.hx = meadowSpots.length ? meadowSpots[(Math.random() * meadowSpots.length) | 0].x : p.hx; p.hy = meadowSpots.length ? meadowSpots[(Math.random() * meadowSpots.length) | 0].y : p.hy; p.x = p.hx; p.y = p.hy; }
+      if (!inViewFn(p.x, p.y)) continue;
+      const tw = 0.5 + Math.sin(now / 400 + p.ph * 5) * 0.5;
+      ctx.fillStyle = `rgba(255,236,160,${0.25 + tw * 0.35})`;
+      const px2 = p.x * z + cx, py2 = p.y * z + cy - z * .3 + Math.sin(now / 500 + p.ph) * z * .12;
+      ctx.fillRect(px2 - 1, py2 - 1, 2.5, 2.5);
+      if (tw > 0.85) { ctx.fillStyle = `rgba(255,250,200,${tw * 0.4})`; ctx.fillRect(px2 - 2.5, py2, 6, 1); ctx.fillRect(px2, py2 - 2.5, 1, 6); }
     }
   }
   // hojas al viento: tormenta
@@ -782,11 +959,11 @@ function drawDayNight() {
   const tick = snap.tick;
   let dark = 0, warm = 0;
   if (tick < 60) dark = 0.42;
-  else if (tick < 78) { dark = 0.42 * (1 - (tick - 60) / 18); warm = 0.14 * (1 - Math.abs(tick - 69) / 9); }
+  else if (tick < 78) { dark = 0.42 * (1 - (tick - 60) / 18); warm = 0.2 * (1 - Math.abs(tick - 69) / 9); }
   else if (tick > 270) dark = 0.42 * Math.min(1, (tick - 270) / 18);
-  else if (tick > 252) warm = 0.14 * (1 - Math.abs(tick - 261) / 9);
+  else if (tick > 252) warm = 0.2 * (1 - Math.abs(tick - 261) / 9);
   if (dark > 0) { ctx.fillStyle = `rgba(10,14,38,${dark})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
-  if (warm > 0) { ctx.fillStyle = `rgba(255,140,60,${warm})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+  if (warm > 0) { ctx.fillStyle = `rgba(255,140,50,${warm})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 }
 function drawRain(dt, mul = 1) {
   const target = 90 * mul;
@@ -965,6 +1142,7 @@ async function post(url, body) { try { await fetch(url, { method: 'POST', header
   $('brainLabel').textContent = provider === 'ollama' ? `Ollama local (${model})` : 'heurístico (sin LLM)';
   const cont = $('roster'); cont.innerHTML = '';
   roster.forEach((c, i) => {
+    const ap = c.appearance || { gender: 'm', skin: 0, hair: 'short' };
     const d = document.createElement('div');
     d.className = 'card-edit';
     d.innerHTML = `
@@ -972,15 +1150,39 @@ async function post(url, body) { try { await fetch(url, { method: 'POST', header
         <input class="ce-name-in" value="${c.name}" maxlength="12" style="background:none;border:none;color:var(--ink);font-weight:700;font-size:14px;width:110px;">
         <span style="margin-left:auto;font-size:11px;color:var(--ink2)">sueño: ${c.ambition}</span>
       </div>
+      <div class="ce-opts">
+        <select class="ap-gender" title="cuerpo">
+          <option value="f" ${ap.gender === 'f' ? 'selected' : ''}>♀ mujer</option>
+          <option value="m" ${ap.gender === 'm' ? 'selected' : ''}>♂ hombre</option>
+        </select>
+        <select class="ap-skin" title="piel">
+          <option value="0" ${ap.skin === 0 ? 'selected' : ''}>piel clara</option>
+          <option value="1" ${ap.skin === 1 ? 'selected' : ''}>piel media</option>
+          <option value="2" ${ap.skin === 2 ? 'selected' : ''}>piel oscura</option>
+          <option value="3" ${ap.skin === 3 ? 'selected' : ''}>piel profunda</option>
+        </select>
+        <select class="ap-hair" title="pelo">
+          <option value="short" ${ap.hair !== 'long' ? 'selected' : ''}>pelo corto</option>
+          <option value="long" ${ap.hair === 'long' ? 'selected' : ''}>pelo largo</option>
+        </select>
+      </div>
       <textarea data-i="${i}">${c.instructivo}</textarea>`;
     cont.appendChild(d);
   });
   $('btnStart').onclick = async () => {
-    const citizens = roster.map((c, i) => ({
-      ...c,
-      name: cont.querySelector(`textarea[data-i="${i}"]`).closest('.card-edit').querySelector('.ce-name-in').value || c.name,
-      instructivo: cont.querySelector(`textarea[data-i="${i}"]`).value,
-    }));
+    const citizens = roster.map((c, i) => {
+      const card = cont.querySelector(`textarea[data-i="${i}"]`).closest('.card-edit');
+      return {
+        ...c,
+        name: card.querySelector('.ce-name-in').value || c.name,
+        instructivo: cont.querySelector(`textarea[data-i="${i}"]`).value,
+        appearance: {
+          gender: card.querySelector('.ap-gender').value,
+          skin: +card.querySelector('.ap-skin').value,
+          hair: card.querySelector('.ap-hair').value,
+        },
+      };
+    });
     $('btnStart').textContent = 'ZARPANDO…'; $('btnStart').disabled = true;
     await post('/api/start', { seed: $('seed').value ? +$('seed').value : undefined, citizens });
     $('btnStart').textContent = 'COMENZAR TEMPORADA'; $('btnStart').disabled = false;

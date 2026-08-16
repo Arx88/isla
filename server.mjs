@@ -18,18 +18,21 @@ const DEFAULT_MODEL = arg('model', 'qwen2.5:7b');
 const DEFAULT_ROSTER = [
   {
     id: 'teo', name: 'Teo', color: '#d95f5f', ambitionKey: 'workshop',
+    appearance: { gender: 'm', skin: 1, hair: 'short' },
     instructivo: 'Ingeniero pragmatico de 34 anos. Frio, calculador, esceptico: no cree en dioses, cree en planes. Habla poco y con precision. Le irrita la gente desordenada.',
     ambition: 'construir un taller y dominar la isla con ingenio',
     traits: { estoico: 0.8, ansioso: 0.2, devoto: 0.0, sociable: 0.2, trabajador: 0.9 },
   },
   {
     id: 'maria', name: 'Maria', color: '#6f9fd9', ambitionKey: 'god_voice',
+    appearance: { gender: 'f', skin: 0, hair: 'long' },
     instructivo: 'Mistica devota de 28 anos. Calida, generosa, miedosa de la oscuridad y de morir sola. Reza con facilidad y ve senales en todo. Consuela a quien la necesita.',
     ambition: 'que el DIOS le hable directamente',
     traits: { estoico: 0.1, ansioso: 0.7, devoto: 0.9, sociable: 0.8, trabajador: 0.5 },
   },
   {
     id: 'luz', name: 'Luz', color: '#e8c95a', ambitionKey: 'leader',
+    appearance: { gender: 'f', skin: 2, hair: 'long' },
     instructivo: 'Ex-lider sindical de 41 anos, orgullosa, carismatica, ambiciosa; desconfia de todos al principio. Protege a quien la sigue leal. No soporta que le den ordenes.',
     ambition: 'que la isla entera la siga y reconozca',
     traits: { estoico: 0.5, ansioso: 0.3, devoto: 0.2, sociable: 0.6, trabajador: 0.7 },
@@ -54,7 +57,7 @@ function snapshot(full = false) {
     god: { devotion: Math.round(sim.god.devotion), mood: Math.round(sim.god.mood), granted: sim.god.granted },
     citizens: sim.citizens.map((c) => ({
       id: c.id, name: c.name, color: c.color, alive: c.alive, deathCause: c.deathCause, sick: c.sick > 0,
-      x: c.pos.x, y: c.pos.y, px: c._px ?? c.pos.x, py: c._py ?? c.pos.y,
+      appearance: c.appearance, x: c.pos.x, y: c.pos.y, px: c._px ?? c.pos.x, py: c._py ?? c.pos.y,
       needs: { water: Math.round(c.needs.water), food: Math.round(c.needs.food), energy: Math.round(c.needs.energy), health: Math.round(c.needs.health) },
       mood: Math.round(c.mood), maslow: c.maslow, maslowName: MASLOW[c.maslow],
       action: c.action ? c.action.id : null, say: (c.visualSay && sim.abs <= c.visualSay.until) ? c.visualSay.text : null,
@@ -73,7 +76,7 @@ function snapshot(full = false) {
       bushes: w.bushes.map((b) => ({ x: b.x, y: b.y, a: b.amount })),
       trees: w.trees.map((t) => ({ x: t.x, y: t.y, a: t.amount })),
       stones: w.stones.map((s) => ({ x: s.x, y: s.y, a: s.amount })),
-      water: w.waterSources.map((s) => ({ x: s.x, y: s.y, k: s.kind })),
+      water: w.waterSources.map((s) => ({ x: s.x, y: s.y, k: s.kind, fx: s.fx || 0, fy: s.fy || 1 })),
       graves: w.graves,
     };
   }

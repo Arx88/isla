@@ -24,6 +24,7 @@ export function createCitizen(def, world, i) {
     stats: { convos: 0, prayers: 0, crafts: 0, godAnswered: 0, ambitionDone: false },
     actionLog: [], _streak: { id: null, n: 0 }, lastConvoAbs: -288,
     color: def.color || ['#d95f5f', '#6f9fd9', '#e8c95a', '#8fd98f', '#c98fd9', '#e8965a', '#7fd9c9', '#d97fb0', '#a9b45a', '#9a8fd9'][i % 10],
+    appearance: Object.assign({ gender: 'm', skin: i % 4, hair: 'short' }, def.appearance),
     visualSay: null,
     maslow: 0, alive: true, deathCause: null,
     lastDeliberationAbs: -99, _others: [],
