@@ -1,10 +1,13 @@
 // perception.js — que ve literalmente cada ciudadano (radio limitado por clima, niebla de guerra)
 import { BIOME, BIOME_NAME, biomeAt } from './worldgen.js';
 
-export function radiusFor(weather = 'clear') {
+// vision: la niebla corta, la tormenta y la NOCHE reducen el radio
+export function radiusFor(weather = 'clear', tick = 100) {
+  const night = tick >= 264 || tick < 72;
   if (weather === 'fog') return 4;
   if (weather === 'storm') return 5;
   if (weather === 'rain') return 6;
+  if (night) return 5;
   return 9;
 }
 
@@ -25,8 +28,8 @@ function dirTo(c, t) {
   return [ns, ew].filter(Boolean).join(' ') || 'cerca';
 }
 
-export function revealFog(c, world, weather = 'clear') {
-  const r = radiusFor(weather) - 2;
+export function revealFog(c, world, weather = 'clear', tick = 100) {
+  const r = radiusFor(weather, tick) - 2;
   for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
     const x = c.pos.x + dx, y = c.pos.y + dy;
     if (x >= 0 && y >= 0 && x < world.w && y < world.h && dx * dx + dy * dy <= r * r) {
@@ -35,8 +38,8 @@ export function revealFog(c, world, weather = 'clear') {
   }
 }
 
-export function perceive(c, world, citizens, weather = 'clear') {
-  const RADIUS = radiusFor(weather);
+export function perceive(c, world, citizens, weather = 'clear', tick = 100) {
+  const RADIUS = radiusFor(weather, tick);
   const known = (e) => c.knownTiles.has(e.y * world.w + e.x);
   const water = nearestOf(world.waterSources.filter(known), c, 30,
     (s) => s.kind === 'rio' || c.memory.facts.some(f => f.includes('pantano')) || true);
@@ -50,7 +53,9 @@ export function perceive(c, world, citizens, weather = 'clear') {
   const others = citizens.filter((o) => o.alive && o.id !== c.id)
     .map((o) => ({ id: o.id, name: o.name, dist: Math.round(Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y)), doing: o.action ? o.action.id : 'nada en particular', ref: o }))
     .filter((o) => o.dist <= RADIUS + 3);
-  return { water, cleanWater, bush, tree, stone, fish, altar, others };
+  const danger = (world.animals || []).find((a) =>
+    (a.type === 'boar' || a.type === 'snake') && Math.hypot(a.x - c.pos.x, a.y - c.pos.y) <= RADIUS);
+  return { water, cleanWater, bush, tree, stone, fish, altar, others, danger };
 }
 
 export function perceptionWords(c, per, world) {
@@ -76,6 +81,7 @@ export function perceptionWords(c, per, world) {
   for (const o of per.others.slice(0, 3)) {
     out.push(`${o.name} esta a ${o.dist} pasos (${doingWords(o.doing)})`);
   }
+  if (per.danger) out.push(per.danger.type === 'boar' ? 'PELIGRO: un jabali cerca' : 'PELIGRO: una serpiente cerca');
   return out;
 }
 

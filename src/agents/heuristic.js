@@ -1,4 +1,5 @@
 // heuristic.js — provider sin LLM: reglas sensatas + frases rotativas (nunca exactas). Fallback universal.
+import { priceFor } from '../engine/god.js';
 const SAY = {
   drink: ['por fin agua', 'agua fresca, que alivio', 'esto es vida', 'hacia falta esto', 'el rio me llama', 'ahh, mejor', 'a beber antes que nada', 'sed saciada, casi'],
   eat: ['algo en el estomago', 'esto sostiene', 'no es un banquete pero sirve', 'a comer entonces', 'con esto llego a la noche', 'bayas otra vez, bueno', 'a la boca', 'comida es vida'],
@@ -55,7 +56,9 @@ export function createHeuristic() {
       if (!actionId) {
         const foodInv = c.inventory.berries + c.inventory.fish;
         const hungry = c.needs.food > 55;
-        if (hungry && has('eat')) actionId = 'eat';
+        if (!urg.crisis && (c.curiosity || 0) > 72 && has('explore') && rng.chance(0.5)) actionId = 'explore';
+        else if (hungry && has('eat')) actionId = 'eat';
+        else if (!urg.crisis && (c.curiosity || 0) > 50 && has('explore') && rng.chance(0.3)) actionId = 'explore';
         else if (foodInv < 2 && has('forage') && rng.chance(0.6)) actionId = 'forage';
         else if (maslow < 2 && !per.shelterDone && c.inventory.wood >= 2 && has('build_shelter')) actionId = 'build_shelter';
         else if (has('gather_wood') && rng.chance(per.shelterDone ? 0.35 : 0.7) && !(per.shelterDone && c.inventory.wood >= 8)) actionId = 'gather_wood';
@@ -101,13 +104,19 @@ export function createHeuristic() {
       return { wish: key ? wishMap[key] : 'ayuda para sobrevivir', offerResource, offerQty: offerResource ? 2 : 0, say: freshSay(SAY.pray, rng) };
     },
     async godDecide(ctx) {
-      const { rng, devotion, mood, recipes, wish } = ctx;
+      const { rng, recipes, wish } = ctx;
+      const god = ctx.god || {};
+      const devotion = god.devotion ?? ctx.devotion ?? 0;
+      const mood = god.mood ?? ctx.mood ?? 50;
       const norm = (s) => (s || '').toLowerCase();
-      const wishRecipe = recipes.find((r) => norm(wish).includes(norm(r.id))
+      const citizen = ctx.citizen;
+      const unknown = recipes.filter((r) => !citizen || !citizen.knownRecipes.some((k) => k.id === r.id));
+      const wishRecipe = unknown.find((r) => norm(wish).includes(norm(r.id))
         || norm(r.name).split(' ').some((wd) => wd.length > 4 && norm(wish).includes(norm(wd))))
-        || recipes.find((r) => r.payable(ctx.citizen)) || null;
+        || unknown.find((r) => r.payable(citizen)) || null;
       const generous = mood > 60 && rng.chance(0.3);
-      if (wishRecipe && (devotion >= wishRecipe.devotion * 0.7 || generous)) {
+      const price = wishRecipe ? priceFor({ mood }, wishRecipe) : Infinity;
+      if (wishRecipe && (devotion >= price || (generous && devotion >= price * 0.8))) {
         return { decision: 'grant', recipeId: wishRecipe.id, reply: pick(GOD_REPLY_GRANT, rng) };
       }
       return { decision: 'demand_more', reply: pick(GOD_REPLY_DEMAND, rng) };

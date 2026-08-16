@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createSim, simTick } from './src/engine/sim.js';
 import { createOllama } from './src/agents/ollama.js';
 import { createHeuristic } from './src/agents/heuristic.js';
+import { createOpenAI } from './src/agents/openai.js';
 import { TICKS_PER_DAY } from './src/engine/body.js';
 
 const args = process.argv.slice(2);
@@ -13,31 +14,69 @@ const arg = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[
 
 const PORT = parseInt(arg('port', 3001));
 const DEFAULT_PROVIDER = arg('provider', 'ollama');
-const DEFAULT_MODEL = arg('model', 'qwen2.5:7b');
+const DEFAULT_MODEL = arg('model', DEFAULT_PROVIDER === 'openai' ? 'nvidia/nemotron-3.5-lightning-30b-a3b' : 'qwen3.5:9b');
+const OPENAI_BASE = arg('openai-base', process.env.OPENAI_BASE_URL || 'https://integrate.api.nvidia.com/v1');
+const OPENAI_KEY = process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY || '';
 
 const DEFAULT_ROSTER = [
   {
-    id: 'teo', name: 'Teo', color: '#d95f5f', ambitionKey: 'workshop',
-    appearance: { gender: 'm', skin: 1, hair: 'short' },
-    instructivo: 'Ingeniero pragmatico de 34 anos. Frio, calculador, esceptico: no cree en dioses, cree en planes. Habla poco y con precision. Le irrita la gente desordenada.',
-    ambition: 'construir un taller y dominar la isla con ingenio',
-    traits: { estoico: 0.8, ansioso: 0.2, devoto: 0.0, sociable: 0.2, trabajador: 0.9 },
+    id: 'lucho', name: 'Lucho', color: '#d95f5f', ambitionKey: 'custom',
+    appearance: { gender: 'm', skin: 0, hair: 'short', hairCol: 0, outfit: 0, beard: true },
+    instructivo: 'Luciano de 36 años, inseguro y con mala suerte, se queja de todo, pero es buen compañero, depresivo pero con gran sentido de la naturaleza y el humor. Adicto a las mujeres.',
+    ambition: 'Irse de esa isla',
+    traits: { estoico: 0.09, ansioso: 1, devoto: 0.79, sociable: 0.2, trabajador: 0.59 },
   },
   {
-    id: 'maria', name: 'Maria', color: '#6f9fd9', ambitionKey: 'god_voice',
-    appearance: { gender: 'f', skin: 0, hair: 'long' },
-    instructivo: 'Mistica devota de 28 anos. Calida, generosa, miedosa de la oscuridad y de morir sola. Reza con facilidad y ve senales en todo. Consuela a quien la necesita.',
-    ambition: 'que el DIOS le hable directamente',
-    traits: { estoico: 0.1, ansioso: 0.7, devoto: 0.9, sociable: 0.8, trabajador: 0.5 },
+    id: 'eli', name: 'Eli', color: '#9a8fd9', ambitionKey: 'custom',
+    appearance: { gender: 'f', skin: 2, hair: 'long', hairCol: 1, outfit: 9, beard: false },
+    instructivo: 'Manipuladora mujer de 32 años, se enoja por todo, discute por todo, usa todo lo que este a su alcance para atrapar y usar a los demas.',
+    ambition: 'Tener todo lo que quiere y que todos la quieran',
+    traits: { estoico: 0.1, ansioso: 1, devoto: 0.34, sociable: 1, trabajador: 0 },
   },
   {
-    id: 'luz', name: 'Luz', color: '#e8c95a', ambitionKey: 'leader',
-    appearance: { gender: 'f', skin: 2, hair: 'long' },
-    instructivo: 'Ex-lider sindical de 41 anos, orgullosa, carismatica, ambiciosa; desconfia de todos al principio. Protege a quien la sigue leal. No soporta que le den ordenes.',
-    ambition: 'que la isla entera la siga y reconozca',
-    traits: { estoico: 0.5, ansioso: 0.3, devoto: 0.2, sociable: 0.6, trabajador: 0.7 },
+    id: 'damian', name: 'Damian', color: '#6f9fd9', ambitionKey: 'custom',
+    appearance: { gender: 'f', skin: 0, hair: 'short', hairCol: 1, outfit: 1, beard: false },
+    instructivo: 'Joven de 35 años, ex carpintero, se le da bien todo lo que tenga que ver con las manos, resuelve, calido y amistoso, siempre dispuesto a ayudar, pero un poco terco.',
+    ambition: 'Convertir la isla en un hermoso lugar para vivir',
+    traits: { estoico: 0.33, ansioso: 0.46, devoto: 0.68, sociable: 1, trabajador: 1 },
+  },
+  {
+    id: 'george', name: 'George', color: '#e8c95a', ambitionKey: 'custom',
+    appearance: { gender: 'f', skin: 0, hair: 'short', hairCol: 5, outfit: 2, beard: true },
+    instructivo: 'totalmente loco, pocos le entienden lo que dice, dicen que era ingeniero pero perdio la cabeza y nadie puede predecirlo. Puede ser un genio como un irracional.',
+    ambition: 'encontrar su lugar en la isla',
+    traits: { estoico: 1, ansioso: 0, devoto: 0, sociable: 0.5, trabajador: 1 },
   },
 ];
+
+const DEFAULT_TRAITS = { estoico: 0.5, ansioso: 0.4, devoto: 0.3, sociable: 0.5, trabajador: 0.5 };
+const PALETTE = ['#d95f5f', '#6f9fd9', '#e8c95a', '#8fd98f', '#c98fd9', '#e8965a', '#7fd9c9', '#d97fb0', '#a9b45a', '#9a8fd9'];
+const AMBITION_KEYS = ['workshop', 'god_voice', 'leader', 'custom'];
+const clamp01 = (v, d = 0.5) => Math.max(0, Math.min(1, typeof v === 'number' && isFinite(v) ? v : d));
+
+function normalizeCitizen(c, i) {
+  const base = DEFAULT_ROSTER[i % DEFAULT_ROSTER.length];
+  const traits = {};
+  for (const k of Object.keys(DEFAULT_TRAITS)) traits[k] = clamp01(c.traits && c.traits[k], DEFAULT_TRAITS[k]);
+  const ap = c.appearance || {};
+  return {
+    id: String(c.id || `c${i}`).slice(0, 16),
+    name: String(c.name || base.name).trim().slice(0, 16) || `Náufrago ${i + 1}`,
+    color: /^#[0-9a-f]{6}$/i.test(c.color || '') ? c.color : PALETTE[i % PALETTE.length],
+    ambitionKey: AMBITION_KEYS.includes(c.ambitionKey) ? c.ambitionKey : (c.ambition ? 'custom' : base.ambitionKey),
+    ambition: String(c.ambition || base.ambition).slice(0, 120),
+    instructivo: String(c.instructivo || base.instructivo).slice(0, 900),
+    traits,
+    appearance: {
+      gender: ap.gender === 'f' ? 'f' : 'm',
+      skin: [0, 1, 2, 3].includes(+ap.skin) ? +ap.skin : 0,
+      hair: ap.hair === 'long' ? 'long' : 'short',
+      hairCol: Math.max(0, Math.min(9, parseInt(ap.hairCol) || 0)),
+      outfit: Math.max(0, Math.min(9, parseInt(ap.outfit ?? i) % 10)),
+      beard: !!ap.beard,
+    },
+  };
+}
 
 let sim = null;
 let tickMs = 2500;           // 1 tick (5 min de juego) cada 2.5s reales -> 1 dia ≈ 12 min
@@ -46,7 +85,9 @@ let loopRunning = false;
 let clients = new Set();
 
 function providerFor(name) {
-  return name === 'ollama' ? createOllama({ model: DEFAULT_MODEL }) : createHeuristic();
+  if (name === 'ollama') return createOllama({ model: DEFAULT_MODEL });
+  if (name === 'openai') return createOpenAI({ model: DEFAULT_MODEL, baseUrl: OPENAI_BASE, apiKey: OPENAI_KEY });
+  return createHeuristic();
 }
 
 function snapshot(full = false) {
@@ -61,6 +102,7 @@ function snapshot(full = false) {
       needs: { water: Math.round(c.needs.water), food: Math.round(c.needs.food), energy: Math.round(c.needs.energy), health: Math.round(c.needs.health) },
       mood: Math.round(c.mood), maslow: c.maslow, maslowName: MASLOW[c.maslow],
       action: c.action ? c.action.id : null, say: (c.visualSay && sim.abs <= c.visualSay.until) ? c.visualSay.text : null,
+      think: (c.visualThink && sim.abs <= c.visualThink.until) ? c.visualThink.text : null,
       skills: Object.fromEntries(Object.entries(c.skills).map(([k, v]) => [k, Math.round(v)])),
       inventory: c.inventory, recipes: c.knownRecipes.map((r) => r.id), ambition: c.ambition,
       relations: Object.fromEntries(Object.entries(c.memory.relations).map(([id, r]) => [id, Math.round(r.score)])),
@@ -111,10 +153,10 @@ async function runLoop() {
     for (const c of sim.citizens) { c._px = c.pos.x; c._py = c.pos.y; }
     try {
       await simTick(sim);
+      if (sim) broadcast('tick', snapshot(false)); // /api/stop puede nullar sim durante el await
     } catch (e) {
       console.error('tick error (el mundo sigue):', e.message);
     }
-    broadcast('tick', snapshot(false));
     const spent = Date.now() - t0;
     await sleep(Math.max(60, tickMs - spent));
   }
@@ -126,15 +168,14 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   try {
-    if (url.pathname === '/' || url.pathname === '/index.html') {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(fs.readFileSync(path.resolve('web', 'index.html')));
-      return;
-    }
-    if (url.pathname === '/app.js' || url.pathname === '/style.css') {
-      res.writeHead(200, { 'content-type': MIME[path.extname(url.pathname)] + '; charset=utf-8' });
-      res.end(fs.readFileSync(path.resolve('web', url.pathname.slice(1))));
-      return;
+    const staticPath = url.pathname === '/' || url.pathname === '/index.html' ? '/index.html' : url.pathname;
+    if (/^\/[a-z0-9._-]+\.(html|js|css|png|ico)$/i.test(staticPath)) {
+      const file = path.resolve('web', staticPath.slice(1));
+      if (file.startsWith(path.resolve('web')) && fs.existsSync(file)) {
+        res.writeHead(200, { 'content-type': (MIME[path.extname(staticPath)] || 'application/octet-stream') + '; charset=utf-8' });
+        res.end(fs.readFileSync(file));
+        return;
+      }
     }
     if (url.pathname === '/api/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -149,10 +190,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/start' && req.method === 'POST') {
       const body = await readBody(req);
-      const citizens = (body.citizens && body.citizens.length ? body.citizens : DEFAULT_ROSTER)
-        .map((c, i) => ({ ...DEFAULT_ROSTER[i % DEFAULT_ROSTER.length], ...c, id: c.id || `c${i}` }));
+      const raw = body.citizens && body.citizens.length ? body.citizens.slice(0, 10) : DEFAULT_ROSTER;
+      if (raw.length < 1) { json(res, { ok: false, error: 'se necesita al menos 1 tripulante' }); return; }
+      const citizens = raw.map((c, i) => normalizeCitizen(c, i));
       await startSeason({ seed: body.seed, citizens, provider: body.provider || DEFAULT_PROVIDER });
-      json(res, { ok: true, seed: sim.cfg.seed });
+      json(res, { ok: true, seed: sim.cfg.seed, crew: citizens.length });
       return;
     }
     if (url.pathname === '/api/control' && req.method === 'POST') {
@@ -164,7 +206,25 @@ const server = http.createServer(async (req, res) => {
       json(res, { ok: true, tickMs, paused });
       return;
     }
+    if (url.pathname === '/api/stop' && req.method === 'POST') {
+      const wasRunning = !!sim;
+      sim = null;
+      for (const res2 of clients) { try { res2.write('event: stop\ndata: {}\n\n'); } catch {} }
+      json(res, { ok: true, wasRunning });
+      return;
+    }
     if (url.pathname === '/api/state') { json(res, sim ? snapshot(true) : { waiting: true }); return; }
+    if (url.pathname === '/api/metrics') {
+      if (!sim) { json(res, { waiting: true }); return; }
+      const m = sim.metrics;
+      json(res, {
+        abs: sim.abs, day: sim.day, tick: sim.tick, citizens: sim.citizens.length,
+        llmCalls: m.llmCalls, llmErrors: m.llmErrors,
+        totalCalls: Object.values(m.llmCalls).reduce((s, v) => s + v, 0),
+        fallbacks: m.deliberations.fallbacks,
+      });
+      return;
+    }
     res.writeHead(404); res.end('no');
   } catch (e) {
     console.error('http error', e);

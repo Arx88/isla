@@ -655,8 +655,8 @@ function drawAnimal(a, z, cx, cy, now) {
 }
 
 // ============ el sobreviviente: apariencia configurable + poses por accion ============
-const SKINS = ['#e8be96', '#d9a06b', '#b97f52', '#8d5a35'];
-const HAIRS = ['#2c2320', '#4a3423', '#6e5238', '#1e1a18'];
+const SKINS = GI.SKINS;
+const HAIRS = GI.HAIRS;
 const trails = new Map();
 let lastTrailPush = 0;
 function drawSurvivor(x, y, z, c, now) {
@@ -672,7 +672,8 @@ function drawSurvivor(x, y, z, c, now) {
   const ph = sleeping || praying ? 0 : walk ? Math.sin(now / 120 + x) : 0;
   const bounce = walk ? Math.abs(Math.sin(now / 120 + x)) * z * 0.04 : Math.sin(now / 800 + x) * z * 0.015;
   const skin = SKINS[ap.skin != null ? ap.skin : (c.name.charCodeAt(0) + c.name.length) % 4];
-  const hairCol = HAIRS[(c.name.charCodeAt(c.name.length - 1)) % 4];
+  const hairCol = HAIRS[ap.hairCol != null ? ap.hairCol % HAIRS.length : c.name.charCodeAt(c.name.length - 1) % 4];
+  const outfitCol = ap.outfit != null ? GI.OUTFITS[ap.outfit % GI.OUTFITS.length] : (c.color || GI.OUTFITS[0]);
   const longHair = female || ap.hair === 'long';
   const fs = female ? 0.94 : 1; // ellas son apenas mas chicas de frame
   const lean = sleeping ? z * .28 : praying ? z * .16 : 0;
@@ -708,7 +709,7 @@ function drawSurvivor(x, y, z, c, now) {
   ctx.fillStyle = skin;
   ctx.fillRect(x - z * .24 * fs, yb + z * .42 + lw, z * .17 * fs, z * .48 - lw);
   ctx.fillRect(x + z * .07 * fs, yb + z * .42 + rw, z * .17 * fs, z * .48 - rw);
-  ctx.fillStyle = c.color;
+  ctx.fillStyle = outfitCol;
   ctx.fillRect(x - z * .3 * fs, yb + z * .34, z * .6 * fs, z * .26);
   ctx.fillStyle = 'rgba(0,0,0,.25)';
   ctx.fillRect(x - z * .3 * fs, yb + z * .52, z * .14, z * .06);
@@ -801,7 +802,7 @@ function drawSurvivor(x, y, z, c, now) {
     ctx.fillRect(x - z * .22, yb - z * .56, z * .08, z * .2);
     ctx.fillRect(x + z * .14, yb - z * .56, z * .08, z * .22);
   }
-  if (!female && c.name.length % 2 === 0) { ctx.fillStyle = hairCol; ctx.fillRect(x - z * .15, yb - z * .3, z * .3, z * .14); } // barba
+  if (!female && (ap.beard !== undefined ? !!ap.beard : c.name.length % 2 === 0)) { ctx.fillStyle = hairCol; ctx.fillRect(x - z * .15, yb - z * .3, z * .3, z * .14); } // barba
   ctx.fillStyle = '#241d18';
   ctx.fillRect(x - z * .1 * fs, yb - z * .44 * fs, z * .05, z * .06);
   ctx.fillRect(x + z * .05 * fs, yb - z * .44 * fs, z * .05, z * .06);
@@ -831,16 +832,36 @@ function drawSurvivor(x, y, z, c, now) {
 }
 let cxG = 0, cyG = 0;
 
+function wrapLines(text, maxW) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const t = cur ? cur + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; }
+    else cur = t;
+  }
+  if (cur) lines.push(cur);
+  while (lines.length > 3) {
+    const tail = lines.pop();
+    lines[lines.length - 1] = (lines[lines.length - 1] + ' ' + tail).slice(0, 40) + '…';
+  }
+  return lines;
+}
+
 function drawBubble(x, y, text) {
   ctx.font = '12.5px system-ui';
-  const short = text.length > 38 ? text.slice(0, 36) + '…' : text;
-  const w = Math.min(250, ctx.measureText(short).width + 16);
-  const h = 24;
+  const PADX = 11, MAXW = 230, LH = 17, PADY = 8;
+  const lines = wrapLines(text, MAXW);
+  const w = Math.min(250, Math.max(...lines.map((l) => ctx.measureText(l).width)) + PADX * 2);
+  const h = lines.length * LH + PADY * 2;
+  const bx = x - w / 2, by = y - h;
   ctx.fillStyle = 'rgba(255,255,255,.96)'; ctx.strokeStyle = '#233046'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.roundRect(x - w / 2, y - h, w, h, 7); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 7); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#1d2a3d'; ctx.textAlign = 'center';
-  ctx.fillText(short, x, y - 7.5); ctx.textAlign = 'left';
+  ctx.beginPath(); ctx.roundRect(bx, by, w, h, 7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x - 5, by + h); ctx.lineTo(x + 5, by + h); ctx.lineTo(x, by + h + 7); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#1d2a3d'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  lines.forEach((l, i) => ctx.fillText(l, x, by + PADY + i * LH));
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 }
 
 // ============ vida ambiental: luciernagas, mariposas, hojas, motas, salpicaduras ============
@@ -1101,6 +1122,11 @@ canvas.addEventListener('click', (e) => {
 });
 
 // ===== paneles =====
+function paintPortrait(cv, c, z, now = performance.now()) {
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, cv.width, cv.height);
+  GI.paint(g, cv.width / 2, cv.height * 0.62, z, c, now, {});
+}
 function buildRosterSide() {
   const side = $('rosterSide'); side.innerHTML = '';
   for (const c of snap.citizens) {
@@ -1108,7 +1134,7 @@ function buildRosterSide() {
     chip.className = 'chip' + (c.alive ? '' : ' dead');
     chip.id = 'chip-' + c.id;
     chip.innerHTML = `
-      <span class="portrait" style="background:${c.color};color:${c.color}"></span>
+      <canvas class="portrait-cv" width="34" height="38"></canvas>
       <div class="info">
         <div class="cname">${c.name}</div>
         <div class="cstat"></div>
@@ -1132,6 +1158,8 @@ function updateRosterSide() {
     const bars = chip.querySelectorAll('.mini-bar i');
     const vals = [100 - c.needs.water, 100 - c.needs.food, c.needs.energy, c.needs.health];
     bars.forEach((b, i) => (b.style.width = vals[i] + '%'));
+    const pcv = chip.querySelector('.portrait-cv');
+    if (pcv) paintPortrait(pcv, c, 13, performance.now() + (c.name.charCodeAt(0) || 0) * 900);
   }
 }
 const ACTION_LABELS = { drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', fish: 'pescando', gather_wood: 'talando', gather_stone: 'juntando piedra', build_shelter: 'construyendo refugio', build_altar: 'levantando altar', pray: 'rezando', talk: 'hablando', gift: 'regalando', teach: 'enseñando', explore: 'explorando', rest: 'descansando', sleep: 'durmiendo', craft: 'fabricando' };
@@ -1142,9 +1170,15 @@ function selectCitizen(id) {
   cam.follow = id; setFollowChip(id);
   const c = snap.citizens.find((x) => x.id === id); if (!c) return;
   $('citizenCard').classList.remove('hidden');
-  $('ccPortrait').style.background = c.color; $('ccPortrait').style.color = c.color;
+  const pcv = $('ccPortrait');
+  if (pcv && pcv.getContext) paintPortrait(pcv, c, 17);
   $('ccName').textContent = c.name;
   $('ccStage').textContent = c.alive ? `${c.maslowName} · ${actionLabel(c.action)}` : `† murió de ${c.deathCause}`;
+  const tk2 = $('ccThink');
+  if (tk2) {
+    tk2.classList.toggle('hidden', !c.think);
+    tk2.textContent = c.think ? `piensa: “${c.think}”` : '';
+  }
   const need = (label, v, color) => `<div class="need">${label}<div class="nb"><i style="width:${v}%;background:${color}"></i></div></div>`;
   $('ccNeeds').innerHTML =
     need('💧 hidratación', 100 - c.needs.water, '#5aa0e8') +
@@ -1192,10 +1226,7 @@ function updateTopbar() {
 window.addEventListener('error', (e) => { const tk = $('ticker'); if (tk) tk.innerHTML = `<span class="tk death"><b>⚠ error</b> ${e.message}</span>` + tk.innerHTML; });
 
 // ===== SSE =====
-const es = new EventSource('/api/stream');
-es.addEventListener('reset', (ev) => {
-  const data = JSON.parse(ev.data);
-  if (data.waiting) return;
+function enterIsland(data) {
   map = data.map; snap = data; snapAt = performance.now();
   $('intro').classList.add('hidden');
   $('app').classList.remove('hidden');
@@ -1203,6 +1234,20 @@ es.addEventListener('reset', (ev) => {
   initAmbient();
   buildRosterSide(); updateRosterSide(); updateTopbar(); updateTicker();
   cam.x = map.camp.x; cam.y = map.camp.y;
+}
+function backToDock() {
+  $('app').classList.add('hidden');
+  $('intro').classList.remove('hidden');
+  map = null; snap = null;
+  closeCard();
+  if (window.__dock && window.__dock.resetSail) window.__dock.resetSail();
+}
+const es = new EventSource('/api/stream');
+es.addEventListener('stop', () => backToDock());
+es.addEventListener('reset', (ev) => {
+  const data = JSON.parse(ev.data);
+  if (data.waiting) return;
+  enterIsland(data);
 });
 es.addEventListener('tick', (ev) => {
   const data = JSON.parse(ev.data);
@@ -1215,6 +1260,10 @@ es.addEventListener('tick', (ev) => {
 
 // ===== controles =====
 $('btnPause').onclick = () => post('/api/control', { action: snap.paused ? 'resume' : 'pause' });
+$('btnStop').onclick = async () => {
+  if (!confirm('¿Volver al menú? Se abandona esta temporada.')) return;
+  await post('/api/stop', {});
+};
 document.querySelectorAll('.spd').forEach((b) => b.onclick = () => post('/api/control', { action: 'speed', value: +b.dataset.ms }));
 $('godChip').onclick = () => {
   const g = snap.god;
@@ -1222,57 +1271,6 @@ $('godChip').onclick = () => {
 };
 async function post(url, body) { try { await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); } catch {} }
 
-// ===== intro =====
-(async () => {
-  const { roster, provider, model } = await (await fetch('/api/roster')).json();
-  $('brainLabel').textContent = provider === 'ollama' ? `Ollama local (${model})` : 'heurístico (sin LLM)';
-  const cont = $('roster'); cont.innerHTML = '';
-  roster.forEach((c, i) => {
-    const ap = c.appearance || { gender: 'm', skin: 0, hair: 'short' };
-    const d = document.createElement('div');
-    d.className = 'card-edit';
-    d.innerHTML = `
-      <div class="ce-head"><span class="ce-dot" style="background:${c.color};color:${c.color}"></span>
-        <input class="ce-name-in" value="${c.name}" maxlength="12" style="background:none;border:none;color:var(--ink);font-weight:700;font-size:14px;width:110px;">
-        <span style="margin-left:auto;font-size:11px;color:var(--ink2)">sueño: ${c.ambition}</span>
-      </div>
-      <div class="ce-opts">
-        <select class="ap-gender" title="cuerpo">
-          <option value="f" ${ap.gender === 'f' ? 'selected' : ''}>♀ mujer</option>
-          <option value="m" ${ap.gender === 'm' ? 'selected' : ''}>♂ hombre</option>
-        </select>
-        <select class="ap-skin" title="piel">
-          <option value="0" ${ap.skin === 0 ? 'selected' : ''}>piel clara</option>
-          <option value="1" ${ap.skin === 1 ? 'selected' : ''}>piel media</option>
-          <option value="2" ${ap.skin === 2 ? 'selected' : ''}>piel oscura</option>
-          <option value="3" ${ap.skin === 3 ? 'selected' : ''}>piel profunda</option>
-        </select>
-        <select class="ap-hair" title="pelo">
-          <option value="short" ${ap.hair !== 'long' ? 'selected' : ''}>pelo corto</option>
-          <option value="long" ${ap.hair === 'long' ? 'selected' : ''}>pelo largo</option>
-        </select>
-      </div>
-      <textarea data-i="${i}">${c.instructivo}</textarea>`;
-    cont.appendChild(d);
-  });
-  $('btnStart').onclick = async () => {
-    const citizens = roster.map((c, i) => {
-      const card = cont.querySelector(`textarea[data-i="${i}"]`).closest('.card-edit');
-      return {
-        ...c,
-        name: card.querySelector('.ce-name-in').value || c.name,
-        instructivo: cont.querySelector(`textarea[data-i="${i}"]`).value,
-        appearance: {
-          gender: card.querySelector('.ap-gender').value,
-          skin: +card.querySelector('.ap-skin').value,
-          hair: card.querySelector('.ap-hair').value,
-        },
-      };
-    });
-    $('btnStart').textContent = 'ZARPANDO…'; $('btnStart').disabled = true;
-    await post('/api/start', { seed: $('seed').value ? +$('seed').value : undefined, citizens });
-    $('btnStart').textContent = 'COMENZAR TEMPORADA'; $('btnStart').disabled = false;
-  };
-})();
+// ===== intro: ahora vive en intro.js (el muelle + cinemática) =====
 
 requestAnimationFrame(frame);

@@ -1,1 +1,12 @@
 runs/
+
+# logs del servidor
+*.log
+*.err.log
+
+# entorno y secretos
+.env
+.env.*
+
+# dependencias
+node_modules/

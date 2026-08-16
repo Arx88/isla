@@ -18,7 +18,7 @@ export function updateBody(c, { tick, raining, shelterDone = true, weather = 'cl
   // sed y hambre: suben siempre; de noche mas lento; lluvia hidrata; ola de calor deshidrata x1.5
   const wMul = heat ? 1.5 : 1;
   c.needs.water = clamp(c.needs.water + (night ? 0.25 : 0.55) * wMul - (raining && !sleeping ? 0.15 : 0), 0, 100);
-  c.needs.food = clamp(c.needs.food + (night ? 0.14 : 0.24), 0, 100);
+  c.needs.food = clamp(c.needs.food + (night ? 0.11 : 0.18), 0, 100);
   // noches frias a la intemperie (antes del refugio) desgastan; tormenta de noche, peor
   if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - (weather === 'storm' ? 0.16 : 0.08), 0, 100);
   // energia
@@ -110,6 +110,65 @@ export function maslowLayer(c, world, others) {
   return 0;
 }
 
+// ===== emociones discretas con causa y decaimiento (la vida interior) =====
+export const EMOTIONS = ['miedo', 'enojo', 'alegria', 'tristeza', 'amor', 'celos', 'verguenza', 'orgullo', 'rencor'];
+export function mkEmotions() { return { miedo: 0, enojo: 0, alegria: 20, tristeza: 0, amor: 0, celos: 0, verguenza: 0, orgullo: 10, rencor: 0 }; }
+
+export function addEmotion(c, emo, amount, why) {
+  if (!(emo in c.emotions)) return;
+  const bias = emo === 'miedo' ? (c.traits.ansioso * 0.8 + 0.5) * (1 - c.traits.estoico * 0.4) : 1;
+  c.emotions[emo] = clamp(c.emotions[emo] + amount * bias, 0, 100);
+  if (amount > 8 && why) c._lastEmoWhy = `${emo}: ${why}`;
+}
+
+export function decayEmotions(c) {
+  for (const k of Object.keys(c.emotions)) {
+    const rate = k === 'rencor' ? 0.04 : k === 'amor' ? 0.1 : 0.35;
+    c.emotions[k] = Math.max(0, c.emotions[k] - rate);
+  }
+}
+
+export function dominantEmotion(c) {
+  let best = null, bv = 25;
+  for (const [k, v] of Object.entries(c.emotions)) if (v > bv) { bv = v; best = k; }
+  return best ? { emo: best, level: bv } : null;
+}
+
+export const EMO_WORD = {
+  miedo: ['inquieto', 'asustado', 'aterrorizado'], enojo: ['irritado', 'enojado', 'furioso'],
+  alegria: ['contento', 'alegre', 'euforico'], tristeza: ['apagado', 'triste', 'desconsolado'],
+  amor: ['enamorado', 'muy enamorado'], celos: ['con celos', 'muy celoso'], verguenza: ['avergonzado', 'muy avergonzado'],
+  orgullo: ['orgulloso', 'muy orgulloso'], rencor: ['con rencor', 'con mucho rencor'],
+};
+export function emotionWords(c) {
+  const d = dominantEmotion(c);
+  if (!d) return 'tranquilo';
+  const lvl = d.level > 70 ? 2 : d.level > 45 ? 1 : 0;
+  return EMO_WORD[d.emo][Math.min(lvl, EMO_WORD[d.emo].length - 1)];
+}
+
+// ===== temperatura corporal (frio de noche, calor en ola) =====
+export function updateTemp(c, { tick, weather, shelterDone }) {
+  const night = isNight(tick);
+  const sleeping = c.action && c.action.id === 'sleep';
+  const outside = !shelterDone;
+  let dt = 0;
+  if (night && outside) dt -= weather === 'storm' ? 0.10 : 0.055;
+  else if (weather === 'heat' && !night) dt += 0.09;
+  else dt += (36.8 - c.temp) * 0.03; // tiende a 36.8
+  c.temp = clamp(c.temp + dt, 35.2, 39.2);
+  if (c.temp < 36.0) { c.needs.health = clamp(c.needs.health - 0.03, 0, 100); addEmotion(c, 'miedo', 0.4, 'el frio de la noche'); }
+  if (c.temp > 37.9) { c.needs.water = clamp(c.needs.water + 0.08, 0, 100); c.needs.energy = clamp(c.needs.energy - 0.05, 0, 100); }
+}
+
+// ===== atributos fisicos (fuerza, agilidad, inteligencia) =====
+export function rollAttributes(seedStr) {
+  let h = 0;
+  for (let i = 0; i < seedStr.length; i++) h = (h * 31 + seedStr.charCodeAt(i)) >>> 0;
+  const r = (k) => 3 + ((h >> (k * 5)) & 7);
+  return { fuerza: r(0), agilidad: r(1), inteligencia: r(2) };
+}
+
 export const MASLOW_NAME = ['colapsado', 'sobreviviendo', 'seguro', 'perteneciendo', 'reconocido', 'realizado'];
 
 // ===== destrezas: aprendizaje manual con curva (retornos decrecientes, modulado por rasgos) =====
@@ -119,7 +178,9 @@ export function mkSkills() { return { fish: 10, forage: 10, gather: 10, build: 1
 
 export function skillUp(c, key, mult = 1) {
   if (!(key in c.skills)) return;
-  const inc = (1.2 + (c.traits.trabajador || 0) * 0.8) * (1 - c.skills[key] / 100) * mult;
+  // los inteligentes aprenden mas rapido
+  const iq = 1 + (((c.attrs && c.attrs.inteligencia) || 5) - 5) * 0.08;
+  const inc = (1.2 + (c.traits.trabajador || 0) * 0.8) * (1 - c.skills[key] / 100) * mult * iq;
   c.skills[key] = clamp(c.skills[key] + inc, 0, 100);
 }
 

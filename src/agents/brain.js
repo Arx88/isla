@@ -13,11 +13,13 @@ export function buildDecisionMessages(ctx) {
   const noRepeat = c.lastSays.length ? `Frases que ya dijiste (PROHIBIDO repetirlas ni hacer variantes trivialmente iguales): ${c.lastSays.slice(-5).map((s) => `"${s}"`).join('; ')}` : '';
   const islandRecent = (ctx.islandRecent && ctx.islandRecent.length)
     ? `\nULTIMAS FRASES OYERON EN LA ISLA (no las digas ni parecidas): ${ctx.islandRecent.slice(-8).map((s) => `"${s}"`).join('; ')}` : '';
-  const soledad = ctx.soledad || ctx.vocacion ? `\n${[ctx.soledad, ctx.vocacion].filter(Boolean).join(' ')}` : '';
+  const soledad = ctx.soledad || ctx.vocacion || ctx.curiosityLine ? `\n${[ctx.soledad, ctx.vocacion, ctx.curiosityLine].filter(Boolean).join(' ')}` : '';
   const system = `Sos la mente de ${c.name}, un naufrago en una isla. NO sos narrador ni estratega: decidis y hablas como ${c.name}.
 Respondes SOLO un objeto JSON valido, sin markdown ni explicaciones:
-{"action":"<id exacto de ACCIONES>","target":"<nombre de la persona si la accion lo pide, si no null>","say":"<frase corta, max 10 palabras>"}
-Sobre el "say": es lo que decis EN VOZ ALTA al ponerte en marcha. Debe sonar a persona real y a ${c.name}, espontaneo, con su humor y su manera de hablar. PROHIBIDO el tono de planificador ("es eficiente", "necesito recursos", "debo priorizar", "es necesario"). Cambia la frase SIEMPRE: nunca repitas ni parafrasees una frase anterior.`;
+{"action":"<id exacto de ACCIONES>","target":"<nombre de la persona si la accion lo pide, si no null>","say":"<frase corta, max 10 palabras>","think":"<tu pensamiento PRIVADO, max 12 palabras, lo que de verdad piensas o sentis y no decis>","goal":"<opcional: un proposito propio para estos dias, max 10 palabras>"}
+Si usas target/goal y no aplican, ponelos como null. Si dudas entre dos acciones, elegi una sola y no expliques.
+Sobre el "say": es lo que decis EN VOZ ALTA al ponerte en marcha. Debe sonar a persona real y a ${c.name}, espontaneo, con su humor y su manera de hablar. PROHIBIDO el tono de planificador ("es eficiente", "necesito recursos", "debo priorizar"). Cambia la frase SIEMPRE: nunca repitas ni parafrasees una frase anterior.
+Sobre el "think": es tu monologo interior — puede ser distinto de lo que decis (miedo, deseo, calculo, nostalgia). Honesto y humano.`;
   const user = `QUIEN SOS: ${c.instructivo}
 
 COMO ESTA TU CUERPO:
@@ -35,8 +37,10 @@ ${recentActions.length ? recentActions.join('\n') : 'todavia no hiciste nada en 
 TU HISTORIA RECIENTE Y VINCULOS:
 ${memoryWords.length ? memoryWords.join('\n') : 'Todo es nuevo para ti: acabas de llegar a la isla.'}
 
-MOMENTO: dia ${time.day}, ${hhmm(time.tick)}${time.night ? ' (es de noche)' : ''}. Clima: ${weather}. Etapa de vida: ${maslowName}.
+MOMENTO: dia ${time.day}, ${hhmm(time.tick)}${time.night ? ' (es de noche: casi no ves mas alla de unos pasos)' : ''}. Clima: ${weather}. Etapa de vida: ${maslowName}.
 ${soledad}
+${ctx.emotionLine || ''}
+${ctx.temperatureLine ? ctx.temperatureLine + '\n' : ''}${ctx.goalLine ? ctx.goalLine + '\n' : ''}${ctx.leaderLine ? ctx.leaderLine : ''}
 
 ${tension}
 
@@ -58,7 +62,7 @@ export function parseDecision(text, menu) {
   const j = extractJson(text);
   if (!j) return null;
   const ids = menu.map((m) => m.id);
-  let action = j.action && String(j.action).trim();
+  let action = (j.action ?? j.accion ?? j.action_name ?? j.choice) && String(j.action ?? j.accion ?? j.action_name ?? j.choice).trim();
   if (action && !ids.includes(action)) {
     const hit = ids.find((id) => action.toLowerCase().includes(id) || id.toLowerCase().includes(action.toLowerCase()));
     action = hit || null;
@@ -66,17 +70,22 @@ export function parseDecision(text, menu) {
   if (!action) return null;
   let say = j.say ? String(j.say).trim() : null;
   if (say && (say.length > 90 || say.includes('"'))) say = say.slice(0, 90).replace(/"/g, '');
-  return { action, target: j.target && j.target !== 'null' ? String(j.target).trim() : null, say };
+  let think = j.think ? String(j.think).trim().slice(0, 90) : null;
+  if (think) think = think.replace(/"/g, '');
+  const goal = j.goal ? String(j.goal).trim().slice(0, 90) : null;
+  return { action, target: j.target && j.target !== 'null' ? String(j.target).trim() : null, say, think, goal };
 }
 
 export function buildDialogueMessages(ctx) {
   const system = `Sos ${ctx.speaker.name}, naufrago en una isla, en una charla con ${ctx.listener.name}.
 Hablas como hablaria ${ctx.speaker.name}: una sola frase corta (max 12 palabras), natural.
 RESPONDES SIEMPRE EN ESPANOL, jamas en otro idioma.
+Respondé a lo ultimo que dijo tu compañero, no cambies de tema gratis.
 Respondes SOLO JSON: {"say":"..."}`;
   const rel = ctx.listener.rel;
   const relTxt = rel >= 20 ? `Consideras a ${ctx.listener.name} un amigo.` : rel <= -10 ? `Desconfias de ${ctx.listener.name}.` : `A ${ctx.listener.name} apenas lo conoces.`;
-  const user = `Tu animo: ${ctx.speaker.mood}/100. ${relTxt}
+  const user = `Tu animo: ${ctx.speaker.mood}/100. ${ctx.emotionLine || ''}${ctx.leader ? ' ' + ctx.leader : ''}
+Relacion con ${ctx.listener.name}: ${ctx.listener.rel >= 20 ? 'amistad' : ctx.listener.rel <= -20 ? 'malos terminos' : 'neutral'} (${ctx.listener.rel}).
 Charla hasta ahora:
 ${ctx.recentLines.length ? ctx.recentLines.join('\n') : '(recien empiezan a hablar)'}
 Tus ultimas vivencias: ${ctx.speakerMemory.join('; ') || 'poco todavia'}
@@ -140,9 +149,17 @@ export function parseGod(text) {
 }
 
 // extrae el primer objeto JSON balanceado de un texto (por si el modelo agrego prosa)
+function tryParse(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+function repairJson(s) {
+  return s
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/,\s*([}\]])/g, '$1');
+}
 export function extractJson(text) {
   if (!text) return null;
-  let t = String(text).replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  let t = String(text).replace(/[\s\S]*?<\/think>/gi, '').trim();
   t = t.replace(/```json|```/g, '');
   const start = t.indexOf('{');
   if (start < 0) return null;
@@ -152,9 +169,18 @@ export function extractJson(text) {
     else if (t[i] === '}') {
       depth--;
       if (depth === 0) {
-        try { return JSON.parse(t.slice(start, i + 1)); } catch { return null; }
+        const slice = t.slice(start, i + 1);
+        const j = tryParse(slice) || tryParse(repairJson(slice));
+        if (j) return j;
+        break;
       }
     }
+  }
+  const last = t.lastIndexOf('}');
+  if (last > start) {
+    const slice = t.slice(start, last + 1);
+    const j = tryParse(repairJson(slice)) || tryParse(slice);
+    if (j) return j;
   }
   return null;
 }

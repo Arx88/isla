@@ -1,5 +1,5 @@
 // worldgen.js — MUNDO procedural: elevacion + humedad + fertilidad, rios con cataratas, fauna
-import { fbm, hash2, clamp } from './util.js';
+import { fbm, hash2, clamp, mulberry32 } from './util.js';
 
 export const BIOME = {
   DEEP: 0, OCEAN: 1, SHAL: 2, SAND: 3, GRASS: 4, DRY: 5, FOREST: 6,
@@ -19,6 +19,7 @@ export function generateWorld(seed, opts = {}) {
   const fertile = new Uint8Array(w * h);
   const idx = (x, y) => y * w + x;
   const peaks = [];
+  const frng = mulberry32((seed >>> 0) ^ 0x9E3779B9);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -154,6 +155,8 @@ export function generateWorld(seed, opts = {}) {
     buildings: { shelter: { progress: 0, needed: 30, done: false, x: camp.x, y: camp.y - 1 },
                  altar: { progress: 0, needed: 12, done: false, x: camp.x + 2, y: camp.y + 1 } },
     graves: [],
+    animalRng: mulberry32((seed >>> 0) ^ 0x51F15EED),
+    wonders: [],
   };
   const addRes = (arr, x, y, extra) => arr.push(Object.assign({ x, y }, extra));
 
@@ -211,14 +214,14 @@ export function generateWorld(seed, opts = {}) {
   const spawnHerd = (type, biomeIds, herds, size) => {
     let placed = 0, tries = 0;
     while (placed < herds && tries++ < herds * 80) {
-      const x = 4 + Math.random() * (w - 8), y = 4 + Math.random() * (h - 8);
+      const x = 4 + frng.next() * (w - 8), y = 4 + frng.next() * (h - 8);
       if (!biomeIds.includes(biome[idx(x | 0, y | 0)])) continue;
       if (Math.hypot(x - camp.x, y - camp.y) < 22) continue;
-      for (let k = 0; k < size + (Math.random() * 3 | 0); k++) {
-        const ax = clamp(x + (Math.random() - 0.5) * 10, 2, w - 3) | 0;
-        const ay = clamp(y + (Math.random() - 0.5) * 8, 2, h - 3) | 0;
+      for (let k = 0; k < size + (frng.next() * 3 | 0); k++) {
+        const ax = clamp(x + (frng.next() - 0.5) * 10, 2, w - 3) | 0;
+        const ay = clamp(y + (frng.next() - 0.5) * 8, 2, h - 3) | 0;
         if (!biomeIds.includes(biome[idx(ax, ay)])) continue;
-        world.animals.push({ type, x: ax, y: ay, hx: ax, hy: ay, hr: 9, tx: ax, ty: ay, ph: Math.random() * 9, id: world.animals.length });
+        world.animals.push({ type, x: ax, y: ay, hx: ax, hy: ay, hr: 9, tx: ax, ty: ay, ph: frng.next() * 9, id: world.animals.length });
       }
       placed++;
     }
@@ -243,9 +246,10 @@ export function passable(world, x, y) {
 
 // fauna: paso simple (se llama cada ~2 ticks)
 export function tickAnimals(world) {
+  const rng = world.animalRng || (world.animalRng = mulberry32((world.seed >>> 0) ^ 0x51F15EED));
   for (const a of world.animals) {
     if (Math.hypot(a.tx - a.x, a.ty - a.y) < 0.2) {
-      const ang = Math.random() * 6.283, d = 2 + Math.random() * 5;
+      const ang = rng.next() * 6.283, d = 2 + rng.next() * 5;
       let nx = a.hx + Math.cos(ang) * d, ny = a.hy + Math.sin(ang) * d;
       nx = clamp(nx, 1, world.w - 2); ny = clamp(ny, 1, world.h - 2);
       if (passable(world, Math.round(nx), Math.round(ny))) { a.tx = nx; a.ty = ny; }

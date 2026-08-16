@@ -14,10 +14,24 @@ export function habitFor(c, key) {
   if (!h) return null;
   let best = null, bn = 0, total = 0;
   for (const [a, n] of Object.entries(h.counts)) { total += n; if (n > bn) { bn = n; best = a; } }
-  if (!best || total < 2) return null;
+  if (!best || total < 5) return null;
   const confidence = bn / (total + 2);
-  if (h.bad && h.bad[best]) return null; // esta accion le salio mal antes en este contexto
+  if (h.bad && h.bad[best]) return null;
+  const roll = ((c._simAbs || 0) * 31 + key.length * 7) % 10;
+  if (roll === 0) return null;
   return confidence >= 0.6 ? best : null;
+}
+
+export function decayHabits(c) {
+  for (const key of Object.keys(c.habits)) {
+    const h = c.habits[key];
+    let total = 0;
+    for (const [a, n] of Object.entries(h.counts)) {
+      h.counts[a] = Math.floor(n / 2);
+      total += h.counts[a];
+    }
+    if (total < 1) delete c.habits[key];
+  }
 }
 
 export function recordOutcome(c, key, actionId, good) {

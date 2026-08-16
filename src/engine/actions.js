@@ -2,7 +2,7 @@
 import { passable } from './worldgen.js';
 import { remember, adjustRel, addFact } from './memory.js';
 import { clamp } from './util.js';
-import { skillUp, SKILL_NAME } from './body.js';
+import { skillUp, SKILL_NAME, addEmotion } from './body.js';
 
 export const CATALOG = {
   drink: { name: 'beber agua', dur: 2, satisfies: 'water', auto: 'water' },
@@ -82,8 +82,36 @@ export function stepToward(c, world, target, speed = 1) {
 
 const adjacent = (c, t, r = 1.6) => Math.hypot(c.pos.x - t.x, c.pos.y - t.y) <= r;
 
+// destino de exploracion: hacia lo desconocido (frontera de knownTiles) o hacia un misterio sin ver
+function frontierTarget(sim, c) {
+  const w = sim.world;
+  const known = c.knownTiles;
+  const wonders = (w.wonders || []).filter((x) => !x.seen);
+  if (wonders.length && sim.rng.chance(0.7)) {
+    wonders.sort((a, b) => Math.hypot(a.x - c.pos.x, a.y - c.pos.y) - Math.hypot(b.x - c.pos.x, b.y - c.pos.y));
+    return { x: wonders[0].x, y: wonders[0].y };
+  }
+  const arr = [...known];
+  if (!arr.length) return null;
+  const cands = [];
+  for (let i = 0; i < 60; i++) {
+    const t = arr[Math.floor(sim.rng.next() * arr.length)];
+    const x = t % w.w, y = Math.floor(t / w.w);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 1 || ny < 1 || nx >= w.w - 1 || ny >= w.h - 1) continue;
+      if (!known.has(ny * w.w + nx) && passable(w, nx, ny)) cands.push({ x: nx, y: ny });
+    }
+  }
+  if (!cands.length) return null;
+  const dCampNow = Math.hypot(c.pos.x - w.camp.x, c.pos.y - w.camp.y);
+  const away = cands.filter((p) => Math.hypot(p.x - w.camp.x, p.y - w.camp.y) > dCampNow + 2);
+  const pool = away.length ? away : cands;
+  return pool[Math.floor(sim.rng.next() * pool.length)];
+}
+
 // arranca una accion; resuelve blanco automaticamente cuando aplica
-export function startAction(sim, c, id, targetRef) {
+export function startAction(sim, c, id, targetRef, openingSay = null) {
   const cat = CATALOG[id];
   if (!cat) return { ok: false, why: 'accion inexistente' };
   let target = targetRef || null;
@@ -94,10 +122,14 @@ export function startAction(sim, c, id, targetRef) {
     target = { x: o.pos.x, y: o.pos.y, citizen: o.id };
   }
   if (id === 'explore') {
-    const ang = sim.rng.next() * 6.283, d = 8 + sim.rng.next() * 8;
-    let tx = clampInt(c.pos.x + Math.cos(ang) * d, 1, sim.world.w - 2);
-    let ty = clampInt(c.pos.y + Math.sin(ang) * d, 1, sim.world.h - 2);
-    target = { x: tx, y: ty, explore: true };
+    const ft = frontierTarget(sim, c);
+    if (ft) target = { x: ft.x, y: ft.y, explore: true };
+    else {
+      const ang = sim.rng.next() * 6.283, d = 8 + sim.rng.next() * 8;
+      let tx = clampInt(c.pos.x + Math.cos(ang) * d, 1, sim.world.w - 2);
+      let ty = clampInt(c.pos.y + Math.sin(ang) * d, 1, sim.world.h - 2);
+      target = { x: tx, y: ty, explore: true };
+    }
   }
   if (id === 'craft') {
     const r = c.knownRecipes.find((x) => x.id === targetRef || x.name === targetRef);
@@ -108,6 +140,7 @@ export function startAction(sim, c, id, targetRef) {
   if (id === 'build_altar') target = { ...sim.world.buildings.altar };
   if (cat.requires === 'altar_done' && !sim.world.buildings.altar.done) return { ok: false, why: 'no hay altar' };
   c.action = { id, target, phase: target ? 'walk' : 'work', workLeft: cat.dur || 1, stuck: 0 };
+  if (openingSay) c.action.openSay = openingSay;
   if (id === 'sleep') {
     // si se acuesta de noche, duerme hasta la manana; si es siesta, hasta recuperar energia
     c.action.wakeAt = sim.tick >= 258 || sim.tick < 80 ? 'morning' : 'energy';
@@ -118,7 +151,7 @@ export function startAction(sim, c, id, targetRef) {
 function clampInt(v, a, b) { return Math.max(a, Math.min(b, Math.round(v))); }
 
 // un tick de accion; devuelve evento textual o null
-export function stepAction(sim, c) {
+export async function stepAction(sim, c) {
   const a = c.action;
   if (!a) return null;
   const world = sim.world;
@@ -135,6 +168,11 @@ export function stepAction(sim, c) {
   }
 
   if (a.phase === 'walk' && a.target) {
+    if (a.target.citizen) {
+      const o = sim.citizens.find((x) => x.alive && x.id === a.target.citizen);
+      if (o) { a.target.x = o.pos.x; a.target.y = o.pos.y; }
+      else return finish(sim, c, null, 'busca a la persona pero ya no esta');
+    }
     if (adjacent(c, a.target)) { a.phase = 'work'; a.stuck = 0; }
     else {
       const moved = stepToward(c, world, a.target);
@@ -157,7 +195,7 @@ function finish(sim, c, evtText, failText) {
   return { kind: 'done', text: null, action: wasId };
 }
 
-function resolve(sim, c, a) {
+async function resolve(sim, c, a) {
   const world = sim.world, inv = c.inventory;
   switch (a.id) {
     case 'drink': {
@@ -181,7 +219,7 @@ function resolve(sim, c, a) {
       if (!b || b.amount <= 0) return finish(sim, c, null, 'encuentra el arbusto vacio');
       b.amount--; inv.berries += c.skills.forage >= 50 ? 4 : 3;
       skillUp(c, 'forage');
-      return finish(sim, c, 'junta bayas');
+      return finish(sim, c, b.kind === 'whale' ? 'corta carne de la ballena varada' : 'junta bayas');
     }
     case 'fish': {
       const net = c.blessings.includes('fishing_net');
@@ -258,10 +296,26 @@ function resolve(sim, c, a) {
       return finish(sim, c, txt);
     }
     case 'pray': {
-      const r = sim.godFlow(c);
+      const r = await sim.godFlow(c);
       return finish(sim, c, r);
     }
     case 'explore': {
+      c.lastExploreAbs = sim.abs;
+      c.curiosity = Math.max(10, (c.curiosity || 0) - 45);
+      const wonder = (world.wonders || []).find((x) => !x.seen && Math.hypot(x.x - c.pos.x, x.y - c.pos.y) <= 6);
+      if (wonder) {
+        wonder.seen = true;
+        const WOW = {
+          fruit: `llega al origen del aroma: fruta madura creciendo por todas partes`,
+          smoke: `llega al lugar del humo: un fogon abandonado con cenizas frias y huellas`,
+          whale: `llega hasta la ballena varada`,
+        };
+        const txt = WOW[wonder.kind] || 'descubre algo que no habia visto antes';
+        remember(c, { kind: 'exploracion', text: `explorando ${txt}`, salience: 4, emotion: +6 });
+        addEmotion(c, 'alegria', 14, 'descubrir algo nuevo');
+        c.curiosity = 10;
+        sim.emit('descubrimiento', `${c.name} ${txt}`, 4);
+      }
       const found = sim.rng.chance(0.3);
       remember(c, { kind: 'exploracion', text: 'exploro tierra desconocida', salience: 1 });
       if (found) {
@@ -277,6 +331,10 @@ function resolve(sim, c, a) {
     case 'talk': {
       const o = sim.citizens.find((x) => x.id === a.target.citizen);
       if (!o || !o.alive || !adjacent(c, o.pos, 2.5)) return finish(sim, c, null, 'busca con quien hablar pero no lo encuentra');
+      if (o.inConversation || c.inConversation) {
+        sim.emit('accion', `${c.name} quiere hablar con ${o.name}, pero ${o.name} ya esta en otra charla`, 1);
+        return finish(sim, c, null, `queria hablar con ${o.name} pero ya estaba ocupado charlando`);
+      }
       sim.startConversation(c, o);
       return { kind: 'done', text: null, action: 'talk' };
     }
