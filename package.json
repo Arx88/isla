@@ -1,0 +1,11 @@
+{
+  "name": "isla",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ISLA - simulacion de mundo con agentes LLM. F0: simulacion acelerada headless.",
+  "scripts": {
+    "sim": "node src/cli.js",
+    "sim:fast": "node src/cli.js --provider heuristic --days 7"
+  }
+}

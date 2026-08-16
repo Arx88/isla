@@ -1,0 +1,109 @@
+// body.js — capa 1: el cuerpo (determinista) + estado en lenguaje vivo + Maslow
+import { clamp } from './util.js';
+
+export const TICKS_PER_DAY = 288; // 1 tick = 5 minutos
+export const NIGHT_START = 264;   // 22:00
+export const NIGHT_END = 72;      // 06:00
+export const isNight = (tick) => tick >= NIGHT_START || tick < NIGHT_END;
+
+// Rasgos de instructivo que modulan umbrales corporales
+export function mkTraits({ estoico = 0, ansioso = 0, devoto = 0, sociable = 0, trabajador = 0 } = {}) {
+  return { estoico, ansioso, devoto, sociable, trabajador };
+}
+
+export function updateBody(c, { tick, raining, shelterDone = true }) {
+  const night = isNight(tick);
+  const sleeping = c.action && c.action.id === 'sleep';
+  // sed y hambre: suben siempre; de noche mas lento; lluvia hidrata un poco
+  c.needs.water = clamp(c.needs.water + (night ? 0.25 : 0.48) - (raining && !sleeping ? 0.15 : 0), 0, 100);
+  c.needs.food = clamp(c.needs.food + (night ? 0.15 : 0.26), 0, 100);
+  // noches frias a la intemperie (antes del refugio) desgastan
+  if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - 0.05, 0, 100);
+  // energia
+  if (sleeping) {
+    c.needs.energy = clamp(c.needs.energy + 0.95 * (c.blessings.includes('bed') ? 1.3 : 1), 0, 100);
+  }
+  else {
+    const active = c.action && c.action.id !== 'rest';
+    c.needs.energy = clamp(c.needs.energy - (night ? (active ? 0.38 : 0.26) : (active ? 0.30 : 0.18)), 0, 100);
+  }
+  // salud
+  let dmg = 0;
+  if (c.needs.water >= 100) dmg += 0.55;
+  if (c.needs.food >= 100) dmg += 0.30;
+  if (c.sick > 0) { dmg += 0.25; c.sick -= 1 / TICKS_PER_DAY; }
+  if (!sleeping && c.needs.energy <= 0) dmg += 0.35;
+  if (dmg > 0) c.needs.health = clamp(c.needs.health - dmg, 0, 100);
+  else if (c.needs.water < 60 && c.needs.food < 60 && c.needs.energy > 30) {
+    c.needs.health = clamp(c.needs.health + 0.12, 0, 100);
+  }
+  // animo: derivado de necesidades + memorias (delta aplicado por eventos)
+  const strain = Math.max(0, c.needs.water - 70) / 30 + Math.max(0, c.needs.food - 70) / 30
+    + Math.max(0, 30 - c.needs.energy) / 30 + Math.max(0, 60 - c.needs.health) / 60;
+  const target = clamp(72 - strain * 18 + c.moodBias, 5, 100);
+  c.mood = clamp(c.mood + (target - c.mood) * 0.01, 0, 100);
+}
+
+const WORDS = {
+  water: [[20, 'no tenes sed'], [50, 'la garganta empieza a resecarse'], [75, 'la sed aprieta: la boca pastosa, pensas en agua seguido'], [90, 'la garganta arde, apenas podes pensar en otra cosa que no sea beber'], [101, 'estas deshidratandote: cada paso cuesta el doble']],
+  food: [[20, 'no tenes hambre'], [50, 'el estomago reclama un poco'], [75, 'el hambre muerde: te mareas levemente al pararte'], [90, 'el estomago te gruñe sin parar, las manos te tiemblan'], [101, 'te estas muriendo de hambre']],
+  energy: [[20, 'estas lucido'], [50, 'el cansancio se siente en las piernas'], [75, 'los ojos te pesan, bostezas'], [90, 'el cuerpo te pide parar a cada rato'], [101, 'estas al borde del colapso']],
+  health: [[99, 'sana'], [70, 'cansado y adolorido'], [40, 'mal: te cuesta mantenerte en pie'], [101, 'muriendose']],
+};
+
+function wordFor(list, v) { for (const [t, s] of list) if (v < t) return s; return list[list.length - 1][1]; }
+
+export function bodyWords(c) {
+  const inv = [];
+  if (c.inventory.berries > 0) inv.push(`${c.inventory.berries} bayas`);
+  if (c.inventory.fish > 0) inv.push(`${c.inventory.fish} pescado(s)`);
+  if (c.inventory.wood > 0) inv.push(`${c.inventory.wood} madera`);
+  if (c.inventory.stone > 0) inv.push(`${c.inventory.stone} piedra`);
+  return [
+    `Sed: ${wordFor(WORDS.water, c.needs.water)}`,
+    `Hambre: ${wordFor(WORDS.food, c.needs.food)}`,
+    `Energia: ${wordFor(WORDS.energy, 100 - c.needs.energy)}`,
+    `Salud: ${wordFor(WORDS.health, c.needs.health)}`,
+    `Animo: ${c.mood > 65 ? 'de buen humor' : c.mood > 40 ? 'apagado' : 'por el piso'}`,
+    c.sick > 0 ? 'Sientes el estomago revuelto (estas enfermo)' : null,
+    inv.length ? `Llevas: ${inv.join(', ')}` : 'No llevas nada',
+  ].filter(Boolean);
+}
+
+// urgencia: necesidad dominante si supera el umbral (modulado por rasgos)
+// ojo: agua/comida son "nivel de necesidad" (mas alto = peor); energia se guarda como disponibilidad
+export function urgency(c) {
+  const tol = 6 + c.traits.estoico * 12; // el estoico aguanta mas antes de que "domine"
+  const cands = [
+    ['water', c.needs.water], ['food', c.needs.food], ['energy', 100 - c.needs.energy],
+  ].sort((a, b) => b[1] - a[1]);
+  const [dom, val] = cands[0];
+  if (val >= 100 - tol) return { crisis: 'hard', dominant: dom };
+  if (val >= 85 - tol) return { crisis: 'soft', dominant: dom };
+  if (c.needs.health < 40) return { crisis: 'soft', dominant: 'health' };
+  return { crisis: null, dominant: val > 60 ? dom : null };
+}
+
+// Maslow: capa mas alta consecutiva satisfecha (1..5)
+export function maslowLayer(c, world, others) {
+  const avgNeed = (c.needs.water + c.needs.food + c.needs.energy) / 3;
+  const l1 = avgNeed < 70 && c.needs.health > 60;
+  const shelter = world.buildings.shelter.done;
+  const stock = c.inventory.berries + c.inventory.fish * 1.5 >= 3;
+  const l2 = l1 && (shelter || stock);
+  const rels = Object.values(c.memory.relations);
+  const bestRel = rels.length ? Math.max(...rels.map(r => r.score)) : 0;
+  const l3 = l2 && (bestRel >= 25 || c.stats.convos >= 2);
+  const standing = others.filter(o => o.alive && o.id !== c.id)
+    .reduce((s, o) => s + ((o.memory.relations[c.id] || {}).score || 0), 0);
+  const l4 = l3 && standing >= 35;
+  const l5 = l4 && c.stats.ambitionDone;
+  if (l5) return 5;
+  if (l4) return 4;
+  if (l3) return 3;
+  if (l2) return 2;
+  if (l1) return 1;
+  return 0;
+}
+
+export const MASLOW_NAME = ['colapsado', 'sobreviviendo', 'seguro', 'perteneciendo', 'reconocido', 'realizado'];
