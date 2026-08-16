@@ -11,14 +11,16 @@ export function mkTraits({ estoico = 0, ansioso = 0, devoto = 0, sociable = 0, t
   return { estoico, ansioso, devoto, sociable, trabajador };
 }
 
-export function updateBody(c, { tick, raining, shelterDone = true }) {
+export function updateBody(c, { tick, raining, shelterDone = true, weather = 'clear' }) {
   const night = isNight(tick);
   const sleeping = c.action && c.action.id === 'sleep';
-  // sed y hambre: suben siempre; de noche mas lento; lluvia hidrata un poco
-  c.needs.water = clamp(c.needs.water + (night ? 0.26 : 0.55) - (raining && !sleeping ? 0.15 : 0), 0, 100);
+  const heat = weather === 'heat';
+  // sed y hambre: suben siempre; de noche mas lento; lluvia hidrata; ola de calor deshidrata x1.5
+  const wMul = heat ? 1.5 : 1;
+  c.needs.water = clamp(c.needs.water + (night ? 0.25 : 0.55) * wMul - (raining && !sleeping ? 0.15 : 0), 0, 100);
   c.needs.food = clamp(c.needs.food + (night ? 0.14 : 0.24), 0, 100);
-  // noches frias a la intemperie (antes del refugio) desgastan
-  if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - 0.08, 0, 100);
+  // noches frias a la intemperie (antes del refugio) desgastan; tormenta de noche, peor
+  if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - (weather === 'storm' ? 0.16 : 0.08), 0, 100);
   // energia
   if (sleeping) {
     c.needs.energy = clamp(c.needs.energy + 0.95 * (c.blessings.includes('bed') ? 1.3 : 1), 0, 100);
@@ -37,9 +39,11 @@ export function updateBody(c, { tick, raining, shelterDone = true }) {
   else if (c.needs.water < 60 && c.needs.food < 60 && c.needs.energy > 30) {
     c.needs.health = clamp(c.needs.health + 0.12, 0, 100);
   }
-  // animo: derivado de necesidades + memorias (delta aplicado por eventos)
+  // animo: derivado de necesidades + clima (delta aplicado por eventos)
+  const weatherStrain = { storm: 8, heat: 6, fog: 3, rain: 2, cloudy: 1, clear: 0 }[weather] || 0;
   const strain = Math.max(0, c.needs.water - 70) / 30 + Math.max(0, c.needs.food - 70) / 30
-    + Math.max(0, 30 - c.needs.energy) / 30 + Math.max(0, 60 - c.needs.health) / 60;
+    + Math.max(0, 30 - c.needs.energy) / 30 + Math.max(0, 60 - c.needs.health) / 60
+    + weatherStrain / 14;
   const target = clamp(72 - strain * 18 + c.moodBias, 5, 100);
   c.mood = clamp(c.mood + (target - c.mood) * 0.01, 0, 100);
 }

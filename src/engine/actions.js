@@ -186,7 +186,8 @@ function resolve(sim, c, a) {
     case 'fish': {
       const net = c.blessings.includes('fishing_net');
       skillUp(c, 'fish');
-      if (sim.rng.chance((net ? 0.75 : 0.40) + c.skills.fish / 250)) { inv.fish++; return finish(sim, c, 'pesca un pez'); }
+      const wBonus = sim.weather === 'rain' ? 0.12 : sim.weather === 'storm' ? -0.35 : 0;
+      if (sim.rng.chance((net ? 0.75 : 0.40) + c.skills.fish / 250 + wBonus)) { inv.fish++; return finish(sim, c, 'pesca un pez'); }
       return finish(sim, c, 'pasa un buen rato pescando... sin suerte');
     }
     case 'gather_wood': {

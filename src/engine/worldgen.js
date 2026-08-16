@@ -1,82 +1,144 @@
-// worldgen.js — isla procedural por elevacion + humedad (Whittaker), rio, recursos
+// worldgen.js — MUNDO procedural: elevacion + humedad + fertilidad, rios con cataratas, fauna
 import { fbm, hash2, clamp } from './util.js';
 
 export const BIOME = {
   DEEP: 0, OCEAN: 1, SHAL: 2, SAND: 3, GRASS: 4, DRY: 5, FOREST: 6,
-  JUNGLE: 7, SWAMP: 8, SWAMPW: 9, PINE: 10, ROCK: 11, SNOW: 12, RBANCO: 13, RIVER: 14,
+  JUNGLE: 7, SWAMP: 8, SWAMPW: 9, PINE: 10, ROCK: 11, SNOW: 12, RBANCO: 13, RIVER: 14, MEADOW: 15,
 };
 export const BIOME_NAME = ['mar profundo', 'mar', 'orilla', 'playa', 'pradera', 'sabana',
-  'bosque', 'selva', 'pantano', 'agua del pantano', 'pinar', 'montana', 'nieve', 'ribera', 'rio'];
+  'bosque', 'selva', 'pantano', 'agua del pantano', 'pinar', 'montana', 'nieve', 'ribera', 'rio', 'campo de flores'];
 const WATER = new Set([BIOME.DEEP, BIOME.OCEAN, BIOME.SHAL, BIOME.SWAMPW, BIOME.RIVER]);
 const isWater = (b) => WATER.has(b);
 const isSalt = (b) => b === BIOME.DEEP || b === BIOME.OCEAN || b === BIOME.SHAL;
 
 export function generateWorld(seed, opts = {}) {
-  const w = opts.w || 96, h = opts.h || 60;
+  const w = opts.w || 448, h = opts.h || 256;
   const biome = new Uint8Array(w * h);
   const emap = new Float32Array(w * h);
+  const mmap = new Float32Array(w * h); // humedad
+  const fertile = new Uint8Array(w * h);
   const idx = (x, y) => y * w + x;
-  let peak = { x: 0, y: 0, e: -1 };
+  const peaks = [];
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const dx = (x / w - 0.5) * 2.05, dy = (y / h - 0.5) * 2.85;
-      const e = fbm(x / 22, y / 22, seed, 4) - Math.sqrt(dx * dx + dy * dy) * 0.92
-        + (fbm(x / 8, y / 8, seed + 5, 2) - 0.5) * 0.14;
-      const m = fbm(x / 26 + 40, y / 26, seed + 61, 3);
-      emap[idx(x, y)] = e;
+      // multiples "continentes" internos: la isla grande tiene macizos
+      const dx = (x / w - 0.5) * 2.0, dy = (y / h - 0.5) * 2.7;
+      const spine = Math.abs(Math.sin(x / w * 3.14159 * 1.5 + seed * 0.001)) * 0.22; // cordillera central serpenteante
+      let e = fbm(x / 30, y / 30, seed, 4) - Math.sqrt(dx * dx + dy * dy) * 0.52 + spine
+        + (fbm(x / 10, y / 10, seed + 5, 2) - 0.5) * 0.12;
+      const m = fbm(x / 34 + 40, y / 34, seed + 61, 3);
+      emap[idx(x, y)] = e; mmap[idx(x, y)] = m;
       let b;
-      if (e < 0.135) b = BIOME.DEEP;
-      else if (e < 0.215) b = BIOME.OCEAN;
-      else if (e < 0.25) b = BIOME.SHAL;
-      else if (e < 0.29) b = BIOME.SAND;
-      else if (e > 0.75) b = BIOME.SNOW;
-      else if (e > 0.64) b = BIOME.ROCK;
-      else if (e > 0.52) b = m > 0.45 ? BIOME.PINE : BIOME.ROCK;
-      else if (e < 0.345 && m > 0.62) b = BIOME.SWAMP;
-      else if (m < 0.34) b = BIOME.DRY;
+      if (e < 0.13) b = BIOME.DEEP;
+      else if (e < 0.205) b = BIOME.OCEAN;
+      else if (e < 0.24) b = BIOME.SHAL;
+      else if (e < 0.28) b = BIOME.SAND;
+      else if (e > 0.72) b = BIOME.SNOW;
+      else if (e > 0.60) b = BIOME.ROCK;
+      else if (e > 0.50) b = m > 0.45 ? BIOME.PINE : BIOME.ROCK;
+      else if (e < 0.32 && m > 0.63) b = BIOME.SWAMP;
+      else if (m < 0.33) b = BIOME.DRY;
+      else if (m > 0.60 && m < 0.68 && e > 0.30 && e < 0.40) b = BIOME.MEADOW; // campos de flores: franja humeda llana
       else if (m < 0.55) b = BIOME.GRASS;
-      else if (m < 0.74) b = BIOME.FOREST;
+      else if (m < 0.75) b = BIOME.FOREST;
       else b = BIOME.JUNGLE;
       biome[idx(x, y)] = b;
-      if (e > peak.e && e < 0.9) peak = { x, y, e };
+      if (e > 0.55 && e < 0.72) peaks.push({ x, y, e });
     }
   }
-  // rio: del pico hacia el mar, bajando
-  let rx = peak.x, ry = peak.y;
-  for (let step = 0; step < 600; step++) {
-    biome[idx(rx, ry)] = BIOME.RIVER;
-    if (rx + 1 < w && biome[idx(rx + 1, ry)] !== BIOME.RIVER && hash2(rx, ry, seed + 7) > 0.7) biome[idx(rx + 1, ry)] = BIOME.RIVER;
-    if (isSalt(biome[idx(rx, ry)])) break;
-    let best = null, be = 99;
-    for (const [ddx, ddy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1]]) {
-      const nx = rx + ddx, ny = ry + ddy;
-      if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
-      const ee = emap[idx(nx, ny)] + hash2(nx, ny, seed + 3) * 0.02;
-      if (ee < be) { be = ee; best = [nx, ny]; }
-    }
-    if (!best) break;
-    const b = biome[idx(best[0], best[1])];
-    if (isSalt(b)) break;
-    [rx, ry] = best;
+
+  // fertilidad: franjas de tierra rica (donde rebrotan los arbustos rapido y crece todo mejor)
+  const fert = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = idx(x, y), b = biome[i];
+    fert[i] = fbm(x / 18 + 90, y / 18, seed + 77, 3) + (b === BIOME.MEADOW ? 0.18 : 0) + (b === BIOME.JUNGLE ? 0.08 : 0) - (b === BIOME.DRY || b === BIOME.ROCK || b === BIOME.SNOW ? 0.2 : 0);
+    fertile[i] = !isWater(b) && fert[i] > 0.56 && (b === BIOME.GRASS || b === BIOME.MEADOW || b === BIOME.FOREST || b === BIOME.JUNGLE) ? 1 : 0;
   }
+
+  // rios (varios, desde picos distintos) + cataratas donde caen en desnivel
+  const waterfalls = [];
+  const carveRiver = (sx, sy) => {
+    let rx = sx, ry = sy, steps = 0, lastE = emap[idx(rx, ry)], stuck = 0, mx = 0, my = 1;
+    const seen = new Set([idx(rx, ry)]);
+    while (steps++ < 2600 && stuck < 12) {
+      biome[idx(rx, ry)] = BIOME.RIVER;
+      const here = emap[idx(rx, ry)];
+      if (lastE - here > 0.045 && here > 0.32) waterfalls.push({ x: rx, y: ry }); // catarata!
+      lastE = here;
+      if (hash2(rx, ry, seed + 7) > 0.6 && rx + 1 < w && !isSalt(biome[idx(rx + 1, ry)])) { biome[idx(rx + 1, ry)] = BIOME.RIVER; seen.add(idx(rx + 1, ry)); }
+      // elegir vecino: minimizar altura + impulso + ruido; tolerar subidas cortas para no trabarse
+      let best = null, bs = 1e9;
+      for (const [ddx, ddy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+        const nx = rx + ddx, ny = ry + ddy;
+        if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
+        const ni = idx(nx, ny);
+        if (seen.has(ni)) continue;
+        const score = emap[ni] - (ddx * mx + ddy * my) * 0.035 + hash2(nx, ny, seed + 3) * 0.05;
+        if (score < bs) { bs = score; best = [nx, ny]; }
+      }
+      if (!best) break;
+      const [nx, ny] = best;
+      const b = biome[idx(nx, ny)];
+      if (isSalt(b)) break;
+      if (emap[idx(nx, ny)] > here + 0.02) stuck++; else stuck = 0;
+      mx = mx * 0.7 + (nx - rx) * 0.3; my = my * 0.7 + (ny - ry) * 0.3;
+      seen.add(idx(nx, ny));
+      rx = nx; ry = ny;
+    }
+  };
+  // cabeceras repartidas por toda la cordillera
+  peaks.sort((a, b) => b.e - a.e);
+  const riverStarts = [];
+  for (const p of peaks) {
+    if (riverStarts.length >= 5) break;
+    if (riverStarts.every((q) => Math.hypot(q.x - p.x, q.y - p.y) > 70)) riverStarts.push(p);
+  }
+  for (const p of riverStarts) carveRiver(p.x, p.y);
+
+  // cataratas: tramos de rio con caida fuerte en pocos tiles (el fbm es suave: hay que medir tramos, no pasos)
+  const isRiver = (x, y) => x >= 0 && y >= 0 && x < w && y < h && biome[idx(x, y)] === BIOME.RIVER;
+  const rivList = [];
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) if (isRiver(x, y)) rivList.push({ x, y });
+  for (const rt of rivList) {
+    if (emap[idx(rt.x, rt.y)] < 0.36) continue;
+    let drop = 0, cx = rt.x, cy = rt.y;
+    for (let k = 0; k < 3; k++) {
+      let best = null, be = 1e9;
+      for (let yy = -1; yy <= 1; yy++) for (let xx = -1; xx <= 1; xx++) {
+        if (!xx && !yy) continue;
+        const nx = cx + xx, ny = cy + yy;
+        if (!isRiver(nx, ny)) continue;
+        if (emap[idx(nx, ny)] < be) { be = emap[idx(nx, ny)]; best = [nx, ny]; }
+      }
+      if (!best) break;
+      drop += emap[idx(cx, cy)] - be;
+      [cx, cy] = best;
+    }
+    if (drop > 0.065 && waterfalls.every((f) => Math.hypot(f.x - rt.x, f.y - rt.y) > 7)) {
+      waterfalls.push({ x: rt.x, y: rt.y, len: 3 });
+    }
+  }
+
   // pocetas de pantano
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-    if (biome[idx(x, y)] === BIOME.SWAMP && fbm(x / 6, y / 6, seed + 44, 2) > 0.66) biome[idx(x, y)] = BIOME.SWAMPW;
+    if (biome[idx(x, y)] === BIOME.SWAMP && fbm(x / 7, y / 7, seed + 44, 2) > 0.66) biome[idx(x, y)] = BIOME.SWAMPW;
   }
-  // campamento: pradera amplia cerca del centro
+
+  // campamento: pradera/campo de flores amplio cerca del centro
   let camp = null;
   outer:
   for (let r = 0; r < Math.floor(w / 2); r++) {
-    for (let a = 0; a < 32; a++) {
-      const x = Math.round(w / 2 + Math.cos(a / 32 * 6.283) * r);
-      const y = Math.round(h / 2 + Math.sin(a / 32 * 6.283) * r * 0.7);
-      if (x < 10 || y < 8 || x > w - 10 || y > h - 8) continue;
-      if (biome[idx(x, y)] !== BIOME.GRASS) continue;
+    for (let a = 0; a < 40; a++) {
+      const x = Math.round(w / 2 + Math.cos(a / 40 * 6.283) * r);
+      const y = Math.round(h / 2 + Math.sin(a / 40 * 6.283) * r * 0.6);
+      if (x < 12 || y < 10 || x > w - 12 || y > h - 10) continue;
+      const b = biome[idx(x, y)];
+      if (b !== BIOME.GRASS && b !== BIOME.MEADOW) continue;
       let ok = true;
-      for (let yy = -2; yy <= 2 && ok; yy++) for (let xx = -2; xx <= 2; xx++) {
+      for (let yy = -3; yy <= 3 && ok; yy++) for (let xx = -3; xx <= 3; xx++) {
         const t = biome[idx(clamp(x + xx, 0, w - 1), clamp(y + yy, 0, h - 1))];
-        if (t !== BIOME.GRASS && t !== BIOME.FOREST) { ok = false; break; }
+        if (t !== BIOME.GRASS && t !== BIOME.MEADOW && t !== BIOME.FOREST) { ok = false; break; }
       }
       if (ok) { camp = { x, y }; break outer; }
     }
@@ -84,61 +146,56 @@ export function generateWorld(seed, opts = {}) {
   if (!camp) camp = { x: Math.floor(w / 2), y: Math.floor(h / 2) };
 
   const world = {
-    seed, w, h, biome, camp,
-    waterSources: [], bushes: [], trees: [], stones: [], fishZones: [],
+    seed, w, h, biome, fertile, emap, waterfalls,
+    camp,
+    waterSources: [], bushes: [], trees: [], stones: [], fishZones: [], animals: [],
     buildings: { shelter: { progress: 0, needed: 30, done: false, x: camp.x, y: camp.y - 1 },
                  altar: { progress: 0, needed: 12, done: false, x: camp.x + 2, y: camp.y + 1 } },
     graves: [],
   };
   const addRes = (arr, x, y, extra) => arr.push(Object.assign({ x, y }, extra));
 
-  // fuentes de agua dulce (rio + pantano) y zonas de pesca (orilla salada)
-  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-    const b = biome[idx(x, y)];
-    if (b === BIOME.RIVER) addRes(world.waterSources, x, y, { kind: 'rio' });
-    else if (b === BIOME.SWAMPW) addRes(world.waterSources, x, y, { kind: 'pantano', sickChance: 0.45 });
-    else if (b === BIOME.SHAL && hash2(x, y, seed + 21) > 0.86) addRes(world.fishZones, x, y, {});
-  }
-  // vegetacion y piedra
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
     const b = biome[idx(x, y)], r = hash2(x, y, seed + 11);
-    if ((b === BIOME.GRASS || b === BIOME.FOREST) && r > 0.93) addRes(world.bushes, x, y, { amount: 1, max: 1 });
-    else if (b === BIOME.FOREST && r > 0.30) addRes(world.trees, x, y, { amount: 3 });
-    else if (b === BIOME.JUNGLE && r > 0.35) addRes(world.trees, x, y, { amount: 4 });
-    else if ((b === BIOME.ROCK || b === BIOME.PINE) && r > 0.90) addRes(world.stones, x, y, { amount: 4 });
+    if (b === BIOME.RIVER) addRes(world.waterSources, x, y, { kind: 'rio' });
+    else if (b === BIOME.SWAMPW) addRes(world.waterSources, x, y, { kind: 'pantano', sickChance: 0.45 });
+    else if (b === BIOME.SHAL && hash2(x, y, seed + 21) > 0.88) addRes(world.fishZones, x, y, {});
+    else if ((b === BIOME.MEADOW || b === BIOME.GRASS || b === BIOME.FOREST) && fertile[idx(x, y)] && r > 0.82) addRes(world.bushes, x, y, { amount: 2, max: 2 }); // los arbustos quieren tierra rica
+    else if ((b === BIOME.MEADOW || b === BIOME.GRASS) && r > 0.94) addRes(world.bushes, x, y, { amount: 1, max: 1 });
+    else if (b === BIOME.FOREST && r > 0.34) addRes(world.trees, x, y, { amount: 3 });
+    else if (b === BIOME.JUNGLE && r > 0.40) addRes(world.trees, x, y, { amount: 4 });
+    else if (b === BIOME.PINE && r > 0.42) addRes(world.trees, x, y, { amount: 3 });
+    else if ((b === BIOME.ROCK || b === BIOME.PINE) && r > 0.93) addRes(world.stones, x, y, { amount: 4 });
     else if (b === BIOME.DRY && r > 0.965) addRes(world.stones, x, y, { amount: 3 });
   }
-  // garantias de jugabilidad cerca del campamento (la escasez viene de distancia/energia, no de ausencia)
-  const nearest = (arr, valid) => {
-    let best = null, bd = 1e9;
-    for (const e of arr) { const d = Math.hypot(e.x - camp.x, e.y - camp.y); if (d < bd) { bd = d; best = e; } }
-    return best;
-  };
+
+  // garantias cerca del campamento
+  const nearest = (arr) => { let best = null, bd = 1e9; for (const e of arr) { const d = Math.hypot(e.x - camp.x, e.y - camp.y); if (d < bd) { bd = d; best = e; } } return best; };
   const ensure = (arr, extra, biomeIds, maxD) => {
-    if (nearest(arr) && Math.hypot(nearest(arr).x - camp.x, nearest(arr).y - camp.y) <= maxD) return;
-    // colocar a mano en tile valida cerca
+    const n = nearest(arr);
+    if (n && Math.hypot(n.x - camp.x, n.y - camp.y) <= maxD) return;
     for (let r = 2; r <= maxD; r++) {
-      for (let a = 0; a < 40; a++) {
-        const x = Math.round(camp.x + Math.cos(a / 40 * 6.283) * r);
-        const y = Math.round(camp.y + Math.sin(a / 40 * 6.283) * r * 0.8);
+      for (let a = 0; a < 48; a++) {
+        const x = Math.round(camp.x + Math.cos(a / 48 * 6.283) * r);
+        const y = Math.round(camp.y + Math.sin(a / 48 * 6.283) * r * 0.8);
         if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
         if (!biomeIds.includes(biome[idx(x, y)])) continue;
         addRes(arr, x, y, extra); return;
       }
     }
   };
-  ensure(world.bushes, { amount: 1, max: 1 }, [BIOME.GRASS, BIOME.FOREST], 10);
-  ensure(world.stones, { amount: 4 }, [BIOME.GRASS, BIOME.ROCK, BIOME.PINE, BIOME.DRY], 14);
-  ensure(world.trees, { amount: 3 }, [BIOME.GRASS, BIOME.FOREST, BIOME.JUNGLE], 12);
-  // agua: garantizar rio/estanque a distancia razonable (la escasez viene del esfuerzo, no de la ausencia)
-  if (!nearest(world.waterSources) || Math.hypot(nearest(world.waterSources).x - camp.x, nearest(world.waterSources).y - camp.y) > 22) {
-    for (let r = 5; r <= 22; r++) {
+  ensure(world.bushes, { amount: 2, max: 2 }, [BIOME.GRASS, BIOME.MEADOW, BIOME.FOREST], 12);
+  ensure(world.stones, { amount: 4 }, [BIOME.GRASS, BIOME.MEADOW, BIOME.ROCK, BIOME.PINE, BIOME.DRY], 16);
+  ensure(world.trees, { amount: 3 }, [BIOME.GRASS, BIOME.FOREST, BIOME.JUNGLE], 14);
+  if (!nearest(world.waterSources) || Math.hypot(nearest(world.waterSources).x - camp.x, nearest(world.waterSources).y - camp.y) > 26) {
+    for (let r = 6; r <= 26; r++) {
       let placed = false;
-      for (let a = 0; a < 48 && !placed; a++) {
-        const x = Math.round(camp.x + Math.cos(a / 48 * 6.283) * r);
-        const y = Math.round(camp.y + Math.sin(a / 48 * 6.283) * r * 0.8);
+      for (let a = 0; a < 56 && !placed; a++) {
+        const x = Math.round(camp.x + Math.cos(a / 56 * 6.283) * r);
+        const y = Math.round(camp.y + Math.sin(a / 56 * 6.283) * r * 0.8);
         if (x < 2 || y < 2 || x >= w - 2 || y >= h - 2) continue;
-        if (biome[idx(x, y)] === BIOME.GRASS || biome[idx(x, y)] === BIOME.FOREST) {
+        const b = biome[idx(x, y)];
+        if (b === BIOME.GRASS || b === BIOME.MEADOW || b === BIOME.FOREST) {
           biome[idx(x, y)] = BIOME.RIVER;
           addRes(world.waterSources, x, y, { kind: 'rio' });
           placed = true;
@@ -147,6 +204,26 @@ export function generateWorld(seed, opts = {}) {
       if (placed) break;
     }
   }
+
+  // fauna: manadas y bichos por bioma (deambulan solos, sin LLM)
+  const spawnAnimals = (type, biomeIds, count, homeR = 10) => {
+    let placed = 0, tries = 0;
+    while (placed < count && tries++ < count * 60) {
+      const x = 2 + Math.floor(Math.random() * (w - 4)), y = 2 + Math.floor(Math.random() * (h - 4));
+      const b = biome[idx(x, y)];
+      if (!biomeIds.includes(b)) continue;
+      if (Math.hypot(x - camp.x, y - camp.y) < 25) continue; // no en el patio de casa
+      world.animals.push({ type, x, y, hx: x, hy: y, hr: homeR, tx: x, ty: y, ph: Math.random() * 9 });
+      placed++;
+    }
+  };
+  const R = (n) => Math.floor(Math.random() * n);
+  spawnAnimals('deer', [BIOME.GRASS, BIOME.MEADOW, BIOME.FOREST], 10 + R(6));
+  spawnAnimals('rabbit', [BIOME.GRASS, BIOME.MEADOW, BIOME.DRY], 12 + R(8));
+  spawnAnimals('boar', [BIOME.DRY, BIOME.FOREST, BIOME.JUNGLE], 8 + R(5));
+  spawnAnimals('snake', [BIOME.SWAMP, BIOME.JUNGLE], 6 + R(4));
+  spawnAnimals('goat', [BIOME.ROCK, BIOME.PINE, BIOME.SNOW], 5 + R(4));
+
   return world;
 }
 
@@ -157,4 +234,20 @@ export function biomeAt(world, x, y) {
 export function passable(world, x, y) {
   if (x < 0 || y < 0 || x >= world.w || y >= world.h) return false;
   return !isWater(world.biome[y * world.w + x]);
+}
+
+// fauna: paso simple (se llama cada ~2 ticks)
+export function tickAnimals(world) {
+  for (const a of world.animals) {
+    if (Math.hypot(a.tx - a.x, a.ty - a.y) < 0.2) {
+      const ang = Math.random() * 6.283, d = 2 + Math.random() * 5;
+      let nx = a.hx + Math.cos(ang) * d, ny = a.hy + Math.sin(ang) * d;
+      nx = clamp(nx, 1, world.w - 2); ny = clamp(ny, 1, world.h - 2);
+      if (passable(world, Math.round(nx), Math.round(ny))) { a.tx = nx; a.ty = ny; }
+    } else {
+      const dx = a.tx - a.x, dy = a.ty - a.y, l = Math.hypot(dx, dy);
+      const sp = a.type === 'snake' ? 0.02 : a.type === 'rabbit' ? 0.05 : 0.035;
+      a.x += dx / l * sp; a.y += dy / l * sp;
+    }
+  }
 }

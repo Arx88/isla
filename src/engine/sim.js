@@ -1,5 +1,5 @@
 // sim.js — orquestador del tick: cuerpo -> habitos -> deliberacion (LLM) -> ejecucion determinista
-import { generateWorld } from './worldgen.js';
+import { generateWorld, tickAnimals } from './worldgen.js';
 import { mulberry32, clamp } from './util.js';
 import { updateBody, bodyWords, urgency, maslowLayer, MASLOW_NAME, isNight, TICKS_PER_DAY, mkSkills, skillWords } from './body.js';
 import { remember, memoryWords, addFact } from './memory.js';
@@ -55,13 +55,13 @@ function arrivalMemory(c, world) {
 
 export function createSim(cfg) {
   const rng = mulberry32(cfg.seed || 42);
-  const world = generateWorld(cfg.seed || 42, { w: 96, h: 60 });
+  const world = generateWorld(cfg.seed || 42, { w: cfg.mapW || 448, h: cfg.mapH || 256 });
   const citizens = cfg.citizens.map((d, i) => createCitizen(d, world, i));
   const heuristic = createHeuristic();
   const provider = cfg.provider || heuristic;
   const sim = {
     cfg, rng, world, citizens, god: createGod(), provider, heuristic,
-    day: 1, tick: 71, abs: 71, conversations: [], pendingRain: false, raining: false,
+    day: 1, tick: 71, abs: 71, conversations: [], pendingRain: false, raining: false, weather: 'clear',
     events: [], perCache: {},
     metrics: {
       deaths: [], deliberations: { total: 0, byAction: {}, fallbacks: 0 }, habitUses: 0,
@@ -105,12 +105,14 @@ export async function simTick(sim) {
   sim.day = Math.floor(sim.abs / TICKS_PER_DAY) + 1;
   sim.tick = sim.abs % TICKS_PER_DAY;
   if (sim.tick === 287) await endOfDay(sim);
+  if (sim.abs % 2 === 0) tickAnimals(sim.world);
   await tickConversations(sim);
 
   for (const c of sim.citizens) {
     if (!c.alive) continue;
     c._simDay = sim.day; c._simTick = sim.tick; c._others = sim.citizens;
-    updateBody(c, { tick: sim.tick, raining: sim.raining, shelterDone: sim.world.buildings.shelter.done });
+    updateBody(c, { tick: sim.tick, raining: sim.raining, shelterDone: sim.world.buildings.shelter.done, weather: sim.weather });
+    if (c._lpx !== c.pos.x || c._lpy !== c.pos.y) { revealFog(c, sim.world, sim.weather); c._lpx = c.pos.x; c._lpy = c.pos.y; }
     if (c.needs.water >= 95 || c.needs.food >= 95 || c.needs.health < 50) sim.metrics.nearDeathTicks++;
     if (c.needs.health <= 0) { die(sim, c); continue; }
     if (c.inConversation) continue;
@@ -141,7 +143,7 @@ async function decideNext(sim, c) {
   const urg = urgency(c);
   c._urg = urg;
   if (urg.crisis) sim.metrics.crisisTicks++;
-  const per = perceive(c, sim.world, sim.citizens);
+  const per = perceive(c, sim.world, sim.citizens, sim.weather);
   per.shelterDone = sim.world.buildings.shelter.done;
   per.altarDone = sim.world.buildings.altar.done;
   sim.perCache[c.id] = per;
@@ -164,7 +166,8 @@ async function decideNext(sim, c) {
   if (!cooldownOk) { const st = startAction(sim, c, 'rest'); if (st.ok) c.action.habitKey = null; return; }
   c.lastDeliberationAbs = sim.abs;
 
-  const menu0 = allowedActions(c, per, sim.world);
+  let menu0 = allowedActions(c, per, sim.world);
+  if (sim.weather === 'storm') menu0 = menu0.filter((m) => m.id !== 'fish'); // con tormenta no se pesca
   // anti-atesoramiento: si ya acumulaste material de sobre y la obra no avanza, juntar mas sale del menu
   const B = sim.world.buildings;
   let menuH = menu0;
@@ -197,7 +200,7 @@ async function decideNext(sim, c) {
     perceptionWords: perceptionWords(c, per, sim.world),
     memoryWords: memoryWords(c),
     time: { day: sim.day, tick: sim.tick, night: isNight(sim.tick) },
-    weather: sim.raining ? 'lluvia' : 'despejado',
+    weather: ({ clear: 'despejado', cloudy: 'nublado', rain: 'lluvia', storm: 'tormenta con truenos', heat: 'ola de calor abrasadora', fog: 'niebla espesa que corta la vision' })[sim.weather] || 'despejado',
     maslowName: MASLOW_NAME[c.maslow] || 'sobreviviendo',
   };
   let decision = null, usedFallback = false;
@@ -252,14 +255,32 @@ async function decideNext(sim, c) {
 function cfg0(sim) { return sim.cfg; }
 
 async function endOfDay(sim, final = false) {
-  // clima del dia que viene
-  if (sim.day > 1 || final) {
-    const base = 0.18 + (sim.god.mood > 70 ? 0.15 : 0) - (sim.god.mood < 35 ? 0.1 : 0);
-    sim.raining = sim.pendingRain ? true : sim.rng.chance(base);
-    sim.pendingRain = false;
-    if (sim.raining) sim.emit('clima', `Llueve sobre la isla (dia ${sim.day})`, 2);
-    godDailyUpdate(sim);
-    if (sim.day % 3 === 0) for (const b of sim.world.bushes) b.amount = Math.min(b.max ?? 3, b.amount + 1);
+  // clima del dia que viene: tirada ponderada, el humor del DIOS inclina la balanza
+  {
+    const mood = sim.god.mood;
+    let table = [
+      ['clear', 0.34], ['cloudy', 0.2], ['rain', 0.16 + (mood > 70 ? 0.10 : 0)],
+      ['storm', 0.06 + (mood < 35 ? 0.10 : 0)], ['heat', 0.12 + (mood < 35 ? 0.06 : 0)], ['fog', 0.06],
+    ];
+    if (sim.pendingRain) { table = [['rain', 1]]; sim.pendingRain = false; }
+    const totalW = table.reduce((s, x) => s + x[1], 0);
+    let roll = sim.rng.next() * totalW;
+    sim.weather = 'clear';
+    for (const [wt, ww] of table) { roll -= ww; if (roll <= 0) { sim.weather = wt; break; } }
+    sim.raining = sim.weather === 'rain' || sim.weather === 'storm';
+    const FLAVOR = {
+      clear: 'Amanece despejado sobre la isla', cloudy: 'El cielo se cubre de nubes',
+      rain: 'La lluvia cae sobre la isla', storm: 'TORMENTA: truenos y viento cruzan la isla',
+      heat: 'Ola de calor: el aire tiembla y no hay sombra que alcance', fog: 'Niebla espesa: la isla desaparece',
+    };
+    sim.emit('clima', FLAVOR[sim.weather], 2);
+  }
+  godDailyUpdate(sim);
+  // rebrote: la tierra fertil alimenta los arbustos mas seguido
+  for (const b of sim.world.bushes) {
+    const fert = sim.world.fertile[b.y * sim.world.w + b.x];
+    if ((fert && sim.day % 2 === 0) || (!fert && sim.day % 4 === 0)) b.amount = Math.min(b.max ?? 2, b.amount + 1);
+  }
     // perecimiento: bayas se pudren 40% por noche (10% con despensa); el pescado crudo no pasa la noche (salvo ahumador)
     for (const c of sim.citizens) {
       if (!c.alive) continue;
@@ -275,7 +296,6 @@ async function endOfDay(sim, final = false) {
         if (!c.memory.facts.some((f) => f.includes('pudre'))) addFact(c, 'la comida se pudre rapido en la isla: comerla, regalarla o conservarla con ayuda del DIOS');
       }
     }
-  }
   // maslow + ambiciones
   for (const c of sim.citizens) {
     if (!c.alive) continue;

@@ -1,7 +1,12 @@
-// perception.js — que ve literalmente cada ciudadano (radio limitado, niebla de guerra)
+// perception.js — que ve literalmente cada ciudadano (radio limitado por clima, niebla de guerra)
 import { BIOME, BIOME_NAME, biomeAt } from './worldgen.js';
 
-const RADIUS = 9;
+export function radiusFor(weather = 'clear') {
+  if (weather === 'fog') return 4;
+  if (weather === 'storm') return 5;
+  if (weather === 'rain') return 6;
+  return 9;
+}
 
 function nearestOf(list, c, maxD, filter = () => true) {
   let best = null, bd = 1e9;
@@ -20,8 +25,8 @@ function dirTo(c, t) {
   return [ns, ew].filter(Boolean).join(' ') || 'cerca';
 }
 
-export function revealFog(c, world) {
-  const r = RADIUS - 2;
+export function revealFog(c, world, weather = 'clear') {
+  const r = radiusFor(weather) - 2;
   for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
     const x = c.pos.x + dx, y = c.pos.y + dy;
     if (x >= 0 && y >= 0 && x < world.w && y < world.h && dx * dx + dy * dy <= r * r) {
@@ -30,7 +35,8 @@ export function revealFog(c, world) {
   }
 }
 
-export function perceive(c, world, citizens) {
+export function perceive(c, world, citizens, weather = 'clear') {
+  const RADIUS = radiusFor(weather);
   const known = (e) => c.knownTiles.has(e.y * world.w + e.x);
   const water = nearestOf(world.waterSources.filter(known), c, 30,
     (s) => s.kind === 'rio' || c.memory.facts.some(f => f.includes('pantano')) || true);
@@ -73,8 +79,7 @@ export function perceptionWords(c, per, world) {
   return out;
 }
 
-function nearCamp(c, world) {
-  const d = Math.hypot(c.pos.x - world.camp.x, c.pos.y - world.camp.y);
+function nearCamp(c, world) {  const d = Math.hypot(c.pos.x - world.camp.x, c.pos.y - world.camp.y);
   return d < 4 ? ', en pleno campamento' : '';
 }
 
@@ -87,5 +92,3 @@ function doingWords(id) {
   };
   return M[id] || 'haciendo algo';
 }
-
-export { RADIUS };

@@ -49,11 +49,11 @@ function providerFor(name) {
 function snapshot(full = false) {
   const w = sim.world;
   const base = {
-    day: sim.day, tick: sim.tick, hhmm: hhmm(sim.tick), raining: sim.raining,
+    day: sim.day, tick: sim.tick, hhmm: hhmm(sim.tick), raining: sim.raining, weather: sim.weather,
     provider: sim.provider.name, model: DEFAULT_MODEL, tickMs, paused,
     god: { devotion: Math.round(sim.god.devotion), mood: Math.round(sim.god.mood), granted: sim.god.granted },
     citizens: sim.citizens.map((c) => ({
-      id: c.id, name: c.name, color: c.color, alive: c.alive, deathCause: c.deathCause,
+      id: c.id, name: c.name, color: c.color, alive: c.alive, deathCause: c.deathCause, sick: c.sick > 0,
       x: c.pos.x, y: c.pos.y, px: c._px ?? c.pos.x, py: c._py ?? c.pos.y,
       needs: { water: Math.round(c.needs.water), food: Math.round(c.needs.food), energy: Math.round(c.needs.energy), health: Math.round(c.needs.health) },
       mood: Math.round(c.mood), maslow: c.maslow, maslowName: MASLOW[c.maslow],
@@ -63,12 +63,13 @@ function snapshot(full = false) {
       relations: Object.fromEntries(Object.entries(c.memory.relations).map(([id, r]) => [id, Math.round(r.score)])),
       lastMemories: c.memory.recent.slice(-3).map((m) => m.text),
     })),
+    animals: w.animals.map((a) => ({ t: a.type, x: Math.round(a.x * 10) / 10, y: Math.round(a.y * 10) / 10 })),
     events: sim.events.slice(-40).map((e, i) => ({ ...e, key: sim.events.length - Math.min(40, sim.events.length) + i })),
   };
   if (full) {
     base.map = {
-      w: w.w, h: w.h, biome: Array.from(w.biome),
-      camp: w.camp, buildings: w.buildings,
+      w: w.w, h: w.h, biome: Array.from(w.biome), fertile: Array.from(w.fertile),
+      camp: w.camp, buildings: w.buildings, waterfalls: w.waterfalls,
       bushes: w.bushes.map((b) => ({ x: b.x, y: b.y, a: b.amount })),
       trees: w.trees.map((t) => ({ x: t.x, y: t.y, a: t.amount })),
       stones: w.stones.map((s) => ({ x: s.x, y: s.y, a: s.amount })),
