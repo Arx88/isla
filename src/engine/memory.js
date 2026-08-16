@@ -2,7 +2,60 @@
 import { clamp } from './util.js';
 
 export function mkMemory() {
-  return { recent: [], relations: {}, facts: [], };
+  return { recent: [], relations: {}, facts: [], places: {} };
+}
+
+// ===== mapa mental de la isla: cada uno recuerda QUE hay DONDE y si cambio =====
+const PLACE_PRIOR = { peligro: 0, agua: 1, comida: 2, refugio: 3, madera: 4, piedra: 5, tranquilo: 6 };
+
+export function markPlace(c, x, y, kind, note) {
+  const key = Math.round(x / 2) + ',' + Math.round(y / 2);
+  const prev = c.memory.places[key];
+  c.memory.places[key] = { x: Math.round(x), y: Math.round(y), k: kind, note: note || '', d: c._simDay || 1 };
+  if (Object.keys(c.memory.places).length > 24) {
+    // expira el recuerdo mas viejo y menos importante
+    let worst = null, ws = -1;
+    for (const [k2, p] of Object.entries(c.memory.places)) {
+      const s = (PLACE_PRIOR[p.k] ?? 9) * 100 + p.d;
+      if (s > ws) { ws = s; worst = k2; }
+    }
+    if (worst && worst !== key) delete c.memory.places[worst];
+  }
+  return prev;
+}
+
+export function placeChanged(c, prev, kind, currentNote) {
+  if (!prev || prev.k !== kind) return null;
+  if (String(prev.note) === String(currentNote)) return null;
+  return prev.note;
+}
+
+export function dangerNear(c, x, y, radius = 6) {
+  for (const p of Object.values(c.memory.places)) {
+    if (p.k === 'peligro' && Math.hypot(p.x - x, p.y - y) <= radius) return p;
+  }
+  return null;
+}
+
+export function placesWords(c) {
+  const dirOf = (p) => {
+    const dx = p.x - c.pos.x, dy = p.y - c.pos.y;
+    const d = Math.round(Math.hypot(dx, dy));
+    const ew = dx > 3 ? 'al este' : dx < -3 ? 'al oeste' : '';
+    const ns = dy > 3 ? 'al sur' : dy < -3 ? 'al norte' : '';
+    const donde = [ns, ew].filter(Boolean).join(' ') || 'por aqui cerca';
+    return `${donde} (~${d} pasos)`;
+  };
+  const NAME = { peligro: 'ZONA PELIGROSA', agua: 'agua dulce', comida: 'comida', madera: 'madera', piedra: 'piedra', refugio: 'refugio/campamento', tranquilo: 'lugar tranquilo' };
+  const list = Object.values(c.memory.places)
+    .sort((a, b) => (PLACE_PRIOR[a.k] ?? 9) - (PLACE_PRIOR[b.k] ?? 9) || a.d - b.d)
+    .slice(0, 6);
+  if (!list.length) return null;
+  return 'TU MAPA DE LA ISLA: ' + list.map((p) => {
+    let s = `${NAME[p.k] || p.k} ${dirOf(p)}`;
+    if (p.note) s += ` (${p.note})`;
+    return s;
+  }).join('; ');
 }
 
 export function remember(c, { kind, text, salience = 1, emotion = 0 }) {

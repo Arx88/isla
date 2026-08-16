@@ -1,11 +1,12 @@
 // actions.js — catalogo de acciones + ejecucion determinista (movimiento, recursos, construccion)
 import { passable } from './worldgen.js';
-import { remember, adjustRel, addFact } from './memory.js';
+import { remember, adjustRel, addFact, markPlace, placeChanged } from './memory.js';
 import { clamp } from './util.js';
 import { skillUp, SKILL_NAME, addEmotion } from './body.js';
 
 export const CATALOG = {
   drink: { name: 'beber agua', dur: 2, satisfies: 'water', auto: 'water' },
+  go_water: { name: 'caminar de vuelta al agua que conoce', dur: 2, satisfies: 'water' },
   eat: { name: 'comer del inventario', dur: 1, satisfies: 'food' },
   forage: { name: 'juntar bayas', dur: 6, satisfies: 'food', auto: 'bush' },
   fish: { name: 'pescar en la orilla', dur: 10, satisfies: 'food', auto: 'fish' },
@@ -17,6 +18,7 @@ export const CATALOG = {
   talk: { name: 'hablar con alguien', requires: 'citizen' },
   gift: { name: 'regalar comida a alguien', dur: 2, requires: 'citizen' },
   teach: { name: 'ensenarle a alguien lo que sabes (receta u oficio)', dur: 8, requires: 'citizen' },
+  steal: { name: 'robarle comida a alguien', dur: 2, requires: 'citizen' },
   explore: { name: 'explorar hacia lo desconocido', dur: 2 },
   rest: { name: 'descansar un rato', dur: 4 },
   sleep: { name: 'dormir hasta la manana', special: 'sleep' },
@@ -27,15 +29,20 @@ export function allowedActions(c, per, world) {
   const list = [];
   const push = (id, note) => list.push({ id, desc: CATALOG[id].name + (note ? ` (${note})` : '') });
   if (per.cleanWater || per.water) push('drink', per.cleanWater ? 'agua limpia' : 'solo agua de pantano: te puede enfermar');
+  if (c.knownWaters && c.knownWaters.length) {
+    let bd = 1e9; for (const k of c.knownWaters) bd = Math.min(bd, Math.hypot(k.x - c.pos.x, k.y - c.pos.y));
+    push('go_water', `a ~${Math.round(bd)} pasos`);
+  }
   if (c.inventory.berries + c.inventory.fish > 0) push('eat');
   if (per.bush) push('forage');
   if (per.fish) push('fish');
   if (per.tree) push('gather_wood');
   if (per.stone) push('gather_stone');
-  if (world.buildings.shelter.progress < world.buildings.shelter.needed && c.inventory.wood >= 2) push('build_shelter', `refugio va ${world.buildings.shelter.progress}/${world.buildings.shelter.needed}`);
-  else if (world.buildings.shelter.progress < world.buildings.shelter.needed) push('build_shelter', 'te faltan 2 maderas');
-  if (world.buildings.altar.progress < world.buildings.altar.needed && c.inventory.stone >= 1) push('build_altar', `altar va ${world.buildings.altar.progress}/${world.buildings.altar.needed}`);
-  else if (world.buildings.altar.progress < world.buildings.altar.needed) push('build_altar', 'te falta 1 piedra');
+  if (world.buildings.shelter.progress < world.buildings.shelter.needed
+    && (!world.campFounded || c.knowsCamp) && c.inventory.wood >= 2) push('build_shelter', world.campFounded ? `refugio va ${world.buildings.shelter.progress}/${world.buildings.shelter.needed}` : 'FUNDA un campamento aqui');
+  else if (world.buildings.shelter.progress < world.buildings.shelter.needed && (!world.campFounded || c.knowsCamp)) push('build_shelter', 'te faltan 2 maderas');
+  if (world.campFounded && c.knowsCamp && world.buildings.altar.progress < world.buildings.altar.needed && c.inventory.stone >= 1) push('build_altar', `altar va ${world.buildings.altar.progress}/${world.buildings.altar.needed}`);
+  else if (world.campFounded && c.knowsCamp && world.buildings.altar.progress < world.buildings.altar.needed) push('build_altar', 'te falta 1 piedra');
   if (world.buildings.altar.done) push('pray');
   const near = per.others.filter((o) => o.dist <= 30);
   if (near.length) push('talk', near.map((o) => o.name).join('/'));
@@ -48,6 +55,9 @@ export function allowedActions(c, per, world) {
   push('explore');
   push('rest');
   push('sleep');
+  // robar: solo visible al borde de la muerte por hambre, con alguien cerca que tenga comida
+  const robables = near.filter((o) => o.ref && (o.ref.inventory.berries > 0 || o.ref.inventory.fish > 0));
+  if (robables.length && c.needs.food > 88) push('steal', 'traicionar para sobrevivir: ' + robables.map((o) => o.name).join('/'));
   const recipes = c.knownRecipes.filter((r) => r.payable(c));
   if (recipes.length) push('craft', recipes.map((r) => r.name).join('/'));
   return list;
@@ -55,7 +65,7 @@ export function allowedActions(c, per, world) {
 
 export function restrictByCrisis(menu, urg) {
   if (!urg.crisis) return menu;
-  const sat = { water: ['drink', 'explore'], food: ['eat', 'forage', 'fish', 'explore', 'gift'], energy: ['rest', 'sleep'], health: ['rest', 'eat', 'drink', 'sleep'] };
+  const sat = { water: ['drink', 'go_water', 'explore'], food: ['eat', 'forage', 'fish', 'explore', 'steal'], energy: ['rest', 'sleep'], health: ['rest', 'eat', 'drink', 'sleep'] };
   const ok = sat[urg.dominant] || [];
   return menu.filter((m) => ok.includes(m.id));
 }
@@ -83,13 +93,16 @@ export function stepToward(c, world, target, speed = 1) {
 const adjacent = (c, t, r = 1.6) => Math.hypot(c.pos.x - t.x, c.pos.y - t.y) <= r;
 
 // destino de exploracion: hacia lo desconocido (frontera de knownTiles) o hacia un misterio sin ver
+// evitando las zonas que el naufrago recuerda peligrosas
 function frontierTarget(sim, c) {
   const w = sim.world;
   const known = c.knownTiles;
-  const wonders = (w.wonders || []).filter((x) => !x.seen);
-  if (wonders.length && sim.rng.chance(0.7)) {
-    wonders.sort((a, b) => Math.hypot(a.x - c.pos.x, a.y - c.pos.y) - Math.hypot(b.x - c.pos.x, b.y - c.pos.y));
-    return { x: wonders[0].x, y: wonders[0].y };
+  const dangers = Object.values(c.memory.places || {}).filter((p) => p.k === 'peligro');
+  const wonderCands = (w.wonders || []).filter((x) => !x.seen
+    && !dangers.some((d) => Math.hypot(d.x - x.x, d.y - x.y) < 6));
+  if (wonderCands.length && sim.rng.chance(0.7)) {
+    wonderCands.sort((a, b) => Math.hypot(a.x - c.pos.x, a.y - c.pos.y) - Math.hypot(b.x - c.pos.x, b.y - c.pos.y));
+    return { x: wonderCands[0].x, y: wonderCands[0].y };
   }
   const arr = [...known];
   if (!arr.length) return null;
@@ -100,7 +113,8 @@ function frontierTarget(sim, c) {
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
       const nx = x + dx, ny = y + dy;
       if (nx < 1 || ny < 1 || nx >= w.w - 1 || ny >= w.h - 1) continue;
-      if (!known.has(ny * w.w + nx) && passable(w, nx, ny)) cands.push({ x: nx, y: ny });
+      if (!known.has(ny * w.w + nx) && passable(w, nx, ny)
+        && !dangers.some((d) => Math.hypot(d.x - nx, d.y - ny) < 6)) cands.push({ x: nx, y: ny });
     }
   }
   if (!cands.length) return null;
@@ -116,19 +130,36 @@ export function startAction(sim, c, id, targetRef, openingSay = null) {
   if (!cat) return { ok: false, why: 'accion inexistente' };
   let target = targetRef || null;
   if (cat.auto) target = sim.perCache[c.id] && (sim.perCache[c.id][cat.auto] || (cat.auto === 'water' ? sim.perCache[c.id].cleanWater || sim.perCache[c.id].water : null));
-  if (id === 'talk' || id === 'gift' || id === 'teach') {
+  if (id === 'talk' || id === 'gift' || id === 'teach' || id === 'steal') {
     const o = sim.citizens.find((x) => x.alive && (x.name === targetRef || x.id === targetRef));
     if (!o) return { ok: false, why: 'no encontras a esa persona' };
     target = { x: o.pos.x, y: o.pos.y, citizen: o.id };
   }
+  if (id === 'go_water') {
+    // caminar al agua que conoce (la mas cercana); al llegar, bebe
+    if (!c.knownWaters || !c.knownWaters.length) return { ok: false, why: 'no conoce agua' };
+    let best = null, bd = 1e9;
+    for (const k of c.knownWaters) { const d = Math.hypot(k.x - c.pos.x, k.y - c.pos.y); if (d < bd) { bd = d; best = k; } }
+    target = { ...best, water: true };
+  }
   if (id === 'explore') {
-    const ft = frontierTarget(sim, c);
-    if (ft) target = { x: ft.x, y: ft.y, explore: true };
-    else {
-      const ang = sim.rng.next() * 6.283, d = 8 + sim.rng.next() * 8;
-      let tx = clampInt(c.pos.x + Math.cos(ang) * d, 1, sim.world.w - 2);
-      let ty = clampInt(c.pos.y + Math.sin(ang) * d, 1, sim.world.h - 2);
-      target = { x: tx, y: ty, explore: true };
+    // destino PEGAJOSO: si ya venia explorando hacia un lado, sigue ese rumbo (anti ping-pong)
+    const stickyOk = c.stickyExplore && sim.abs < c.stickyExplore.until
+      && Math.hypot(c.stickyExplore.x - c.pos.x, c.stickyExplore.y - c.pos.y) > 2;
+    if (stickyOk) {
+      target = { x: c.stickyExplore.x, y: c.stickyExplore.y, explore: true };
+    } else {
+      const ft = frontierTarget(sim, c);
+      if (ft) {
+        target = { x: ft.x, y: ft.y, explore: true };
+        c.stickyExplore = { x: ft.x, y: ft.y, until: sim.abs + 45 };
+      } else {
+        const ang = sim.rng.next() * 6.283, d = 8 + sim.rng.next() * 8;
+        let tx = clampInt(c.pos.x + Math.cos(ang) * d, 1, sim.world.w - 2);
+        let ty = clampInt(c.pos.y + Math.sin(ang) * d, 1, sim.world.h - 2);
+        target = { x: tx, y: ty, explore: true };
+        c.stickyExplore = { x: tx, y: ty, until: sim.abs + 45 };
+      }
     }
   }
   if (id === 'craft') {
@@ -136,7 +167,10 @@ export function startAction(sim, c, id, targetRef, openingSay = null) {
     if (!r || !r.payable(c)) return { ok: false, why: 'no conoces o no puedes pagar esa receta' };
     target = null;
   }
-  if (id === 'build_shelter') target = { ...sim.world.buildings.shelter };
+  if (id === 'build_shelter') {
+    if (sim.world.campFounded && c.knowsCamp) target = { ...sim.world.buildings.shelter };
+    else target = null; // lo funda donde esta parado
+  }
   if (id === 'build_altar') target = { ...sim.world.buildings.altar };
   if (cat.requires === 'altar_done' && !sim.world.buildings.altar.done) return { ok: false, why: 'no hay altar' };
   c.action = { id, target, phase: target ? 'walk' : 'work', workLeft: cat.dur || 1, stuck: 0 };
@@ -173,8 +207,15 @@ export async function stepAction(sim, c) {
       if (o) { a.target.x = o.pos.x; a.target.y = o.pos.y; }
       else return finish(sim, c, null, 'busca a la persona pero ya no esta');
     }
-    if (adjacent(c, a.target)) { a.phase = 'work'; a.stuck = 0; }
+    if (adjacent(c, a.target)) { a.phase = 'work'; a.stuck = 0; a.progCheck = 0; a.progDist = 0; }
     else {
+      // perro guardián de progreso: si en 6 ticks no te acercaste, el camino no existe para vos
+      const dNow = Math.hypot(c.pos.x - a.target.x, c.pos.y - a.target.y);
+      if (!a.progDist) { a.progDist = dNow; a.progCheck = 6; }
+      if (--a.progCheck <= 0) {
+        if (dNow > a.progDist - 1.5) return finish(sim, c, null, 'da vueltas sin llegar y lo deja por imposible');
+        a.progDist = dNow; a.progCheck = 6;
+      }
       const moved = stepToward(c, world, a.target);
       if (!moved && ++a.stuck > 3) return finish(sim, c, null, 'no logra avanzar y lo deja');
     }
@@ -200,6 +241,11 @@ async function resolve(sim, c, a) {
   switch (a.id) {
     case 'drink': {
       const src = a.target || {};
+      if (a.target && a.target.x != null && !c.knownWaters.some((k) => Math.hypot(k.x - a.target.x, k.y - a.target.y) < 3)) {
+        c.knownWaters.push({ x: Math.round(a.target.x), y: Math.round(a.target.y) });
+        if (c.knownWaters.length > 6) c.knownWaters.shift();
+      }
+      if (src.kind !== 'pantano') markPlace(c, c.pos.x, c.pos.y, 'agua', 'dulce, confiable');
       if (src.kind === 'pantano' && sim.rng.chance(0.45)) {
         c.sick = 0.25; c.needs.water = 0;
         addFact(c, 'el agua del pantano lo enferma');
@@ -209,6 +255,36 @@ async function resolve(sim, c, a) {
       c.needs.water = 0;
       return finish(sim, c, 'bebe agua fresca');
     }
+    case 'go_water': {
+      c.needs.water = 0;
+      if (a.target && a.target.x != null) markPlace(c, a.target.x, a.target.y, 'agua', 'dulce, confiable');
+      return finish(sim, c, 'llega jadeando al agua que recordaba y bebe hasta saciarse');
+    }
+    case 'steal': {
+      const o = sim.citizens.find((x) => x.id === a.target.citizen);
+      if (!o || !o.alive) return finish(sim, c, null, 'busca a quien robarle pero no esta');
+      const took = o.inventory.fish > 0 ? 'fish' : o.inventory.berries > 0 ? 'berries' : null;
+      if (!took) return finish(sim, c, null, 'intentaba robarle pero no tenia nada');
+      o.inventory[took]--; c.inventory[took]++;
+      const caught = o.action && o.action.id !== 'sleep' && Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y) < 6;
+      adjustRel(o, c.id, -18, `${c.name} le robo comida`);
+      adjustRel(c, o.id, -6, `le robe a ${o.name}`);
+      if (caught) {
+        addEmotion(o, 'enojo', 30, `${c.name} le robo`);
+        addEmotion(o, 'miedo', 12, 'que le roben durmiendo despierto');
+        addEmotion(c, 'verguenza', 25, 'ser descubierto robando');
+        addEmotion(c, 'miedo', 15, 'que lo descubrieran');
+        remember(o, { kind: 'traicion', text: `${c.name} le robo comida a la cara`, salience: 5, emotion: -10 });
+        remember(c, { kind: 'verguenza', text: `le robo a ${o.name} y lo descubrieron`, salience: 5, emotion: -8 });
+        sim.metrics.steals = (sim.metrics.steals || 0) + 1;
+        return finish(sim, c, `le ROBA comida a ${o.name}... y lo descubren in fraganti`);
+      }
+      addEmotion(c, 'tristeza', 8, 'lo que hizo para sobrevivir');
+      remember(o, { kind: 'perdida', text: `le falta comida: alguien se la llevo`, salience: 3, emotion: -5 });
+      remember(c, { kind: 'verguenza', text: `le robo a ${o.name} sin que se diera cuenta`, salience: 4, emotion: -6 });
+      sim.metrics.steals = (sim.metrics.steals || 0) + 1;
+      return finish(sim, c, `le roba comida a ${o.name} mientras nadie mira`);
+    }
     case 'eat': {
       if (inv.fish > 0) { inv.fish--; c.needs.food = clamp(c.needs.food - 45, 0, 100); return finish(sim, c, 'come un pescado'); }
       if (inv.berries > 0) { inv.berries--; c.needs.food = clamp(c.needs.food - 32, 0, 100); return finish(sim, c, 'come bayas'); }
@@ -217,8 +293,16 @@ async function resolve(sim, c, a) {
     case 'forage': {
       const b = a.target;
       if (!b || b.amount <= 0) return finish(sim, c, null, 'encuentra el arbusto vacio');
+      const prev = markPlace(c, b.x, b.y, 'comida', `${b.amount} raciones`);
       b.amount--; inv.berries += c.skills.forage >= 50 ? 4 : 3;
       skillUp(c, 'forage');
+      // el mapa mental registra el CAMBIO: esto ya no es lo que era
+      const changed = placeChanged(c, prev, 'comida', `${b.amount} raciones`);
+      if (changed && parseInt(changed) >= (b.amount + 2)) {
+        addEmotion(c, 'tristeza', 4, 'las bayas se estan agotando');
+        c.memory.places[Math.round(b.x / 2) + ',' + Math.round(b.y / 2)].note = `${b.amount} raciones`;
+        if (b.amount <= 0) sim.emit('memoria', `${c.name} revisa su arbusto de siempre: LO ENCUENTRA VACIO. La isla cambia.`, 2);
+      }
       return finish(sim, c, b.kind === 'whale' ? 'corta carne de la ballena varada' : 'junta bayas');
     }
     case 'fish': {
@@ -233,6 +317,7 @@ async function resolve(sim, c, a) {
       if (!t || t.amount <= 0) return finish(sim, c, null, 'los arboles ya estaban talados');
       t.amount--; inv.wood += (c.blessings.includes('axe') ? 3 : 2) + (c.skills.gather >= 70 ? 1 : 0);
       skillUp(c, 'gather');
+      markPlace(c, t.x, t.y, 'madera', `${t.amount} arboles`);
       return finish(sim, c, 'tala y apila madera');
     }
     case 'gather_stone': {
@@ -240,6 +325,7 @@ async function resolve(sim, c, a) {
       if (!s || s.amount <= 0) return finish(sim, c, null, 'no queda piedra ahi');
       s.amount--; inv.stone += 2 + (c.skills.gather >= 70 ? 1 : 0);
       skillUp(c, 'gather');
+      markPlace(c, s.x, s.y, 'piedra', `${s.amount} restantes`);
       return finish(sim, c, 'carga piedras');
     }
     case 'build_shelter': {
@@ -247,6 +333,21 @@ async function resolve(sim, c, a) {
       inv.wood -= 2;
       skillUp(c, 'build');
       const B = world.buildings.shelter;
+      if (!world.campFounded) {
+        // FUNDACION: el primer refugio marca el campamento de la temporada
+        world.campFounded = true;
+        world.camp = { x: c.pos.x + 1, y: c.pos.y };
+        B.x = world.camp.x; B.y = world.camp.y;
+        B.founder = c.name;
+        c.knowsCamp = true;
+        markPlace(c, B.x, B.y, 'refugio', 'campamento propio');
+        sim.emit('isla', `${c.name} FUNDA el primer campamento de la temporada`, 5);
+        for (const o of sim.citizens) if (o.alive && o.id !== c.id) {
+          addFact(o, `hay un campamento en la isla (fundado por ${c.name}); aun no sabe donde es`);
+        }
+        remember(c, { kind: 'logro', text: 'fundó el campamento', salience: 5, emotion: 10 });
+        return finish(sim, c, 'clava las primeras estacas: nace un campamento');
+      }
       B.progress += c.skills.build >= 70 ? 2 : 1;
       if (B.progress >= B.needed && !B.done) {
         B.done = true;
@@ -301,6 +402,7 @@ async function resolve(sim, c, a) {
     }
     case 'explore': {
       c.lastExploreAbs = sim.abs;
+      c.stickyExplore = null;
       c.curiosity = Math.max(10, (c.curiosity || 0) - 45);
       const wonder = (world.wonders || []).find((x) => !x.seen && Math.hypot(x.x - c.pos.x, x.y - c.pos.y) <= 6);
       if (wonder) {
@@ -309,6 +411,7 @@ async function resolve(sim, c, a) {
           fruit: `llega al origen del aroma: fruta madura creciendo por todas partes`,
           smoke: `llega al lugar del humo: un fogon abandonado con cenizas frias y huellas`,
           whale: `llega hasta la ballena varada`,
+          huellas: `sigue las huellas hasta una zona pisoteada: alguien vivo paso por aqui hace poco`,
         };
         const txt = WOW[wonder.kind] || 'descubre algo que no habia visto antes';
         remember(c, { kind: 'exploracion', text: `explorando ${txt}`, salience: 4, emotion: +6 });

@@ -157,7 +157,22 @@ export function generateWorld(seed, opts = {}) {
     graves: [],
     animalRng: mulberry32((seed >>> 0) ^ 0x51F15EED),
     wonders: [],
+    knownUnion: new Uint8Array(w * h),  // niebla de guerra del espectador (union de lo visto por todos)
+    newDiscovered: [],                  // tiles descubiertos desde el ultimo snapshot
   };
+  // desembocaduras: rios que llegan a la playa (donde varan los naufragos)
+  world.riverMouths = [];
+  for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+    if (biome[idx(x, y)] !== BIOME.RIVER) continue;
+    // rio con arena u orilla adyacente cerca del mar
+    let sand = false, salt = false;
+    for (let yy = -2; yy <= 2 && !(sand && salt); yy++) for (let xx = -2; xx <= 2 && !(sand && salt); xx++) {
+      const b2 = biome[idx(clamp(x + xx, 0, w - 1), clamp(y + yy, 0, h - 1))];
+      if (b2 === BIOME.SAND) sand = true;
+      if (b2 === BIOME.OCEAN || b2 === BIOME.SHAL) salt = true;
+    }
+    if (sand) world.riverMouths.push({ x, y });
+  }
   const addRes = (arr, x, y, extra) => arr.push(Object.assign({ x, y }, extra));
 
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {

@@ -319,17 +319,23 @@ function frame(now) {
     }
   }
 
+  // ===== NIEBLA DE GUERRA del espectador: bruma viva sobre lo inexplorado =====
+  drawFog(now, z, cx, cy);
+
   // ===== dibujar con ORDEN POR PROFUNDIDAD (nadie camina sobre arboles) =====
   zG = z;
+  const fogAt = (x, y) => fogSet.has((y | 0) * map.w + (x | 0));
   const sortables = [];
-  for (const tr of map.trees) if (tr.a > 0 && inView(tr.x, tr.y, 3)) sortables.push({ y: tr.y + 0.95, draw: () => drawTree(tr, z, cx, cy, now) });
-  for (const b of map.bushes) if (b.a > 0 && inView(b.x, b.y)) sortables.push({ y: b.y + 0.9, draw: () => drawBush(b, z, cx, cy, now) });
-  for (const s of map.stones) if (s.a > 0 && inView(s.x, s.y)) sortables.push({ y: s.y + 0.85, draw: () => drawStone(s, z, cx, cy, now) });
-  for (const a of snap.animals || []) if (inView(a.x, a.y)) sortables.push({ y: a.y + 0.7, draw: () => drawAnimal(a, z, cx, cy, now) });
+  for (const tr of map.trees) if (tr.a > 0 && inView(tr.x, tr.y, 3) && fogAt(tr.x, tr.y)) sortables.push({ y: tr.y + 0.95, draw: () => drawTree(tr, z, cx, cy, now) });
+  for (const b of map.bushes) if (b.a > 0 && inView(b.x, b.y) && fogAt(b.x, b.y)) sortables.push({ y: b.y + 0.9, draw: () => drawBush(b, z, cx, cy, now) });
+  for (const s of map.stones) if (s.a > 0 && inView(s.x, s.y) && fogAt(s.x, s.y)) sortables.push({ y: s.y + 0.85, draw: () => drawStone(s, z, cx, cy, now) });
+  for (const a of snap.animals || []) if (inView(a.x, a.y) && fogAt(a.x, a.y)) sortables.push({ y: a.y + 0.7, draw: () => drawAnimal(a, z, cx, cy, now) });
+  // maravillas del mundo (humo, fruta, ballena) — solo donde ya exploraron
+  for (const wd of map.wonders || []) if (!wd.seen && inView(wd.x, wd.y, 3) && fogAt(wd.x, wd.y)) drawWonder(wd, z, cx, cy, now);
   const Bsh = map.buildings.shelter, Bal = map.buildings.altar;
   if (Bsh.progress > 0) sortables.push({ y: Bsh.y + 1.1, draw: () => drawShelter(Bsh, z, cx, cy, now) });
   if (Bal.progress > 0) sortables.push({ y: Bal.y + 1.1, draw: () => drawAltar(Bal, z, cx, cy, now) });
-  for (const g of map.graves) if (inView(g.x, g.y)) sortables.push({ y: g.y + 0.9, draw: () => drawGrave(g.x * z + cx, g.y * z + cy, z) });
+  for (const g of map.graves) if (inView(g.x, g.y) && fogAt(g.x, g.y)) sortables.push({ y: g.y + 0.9, draw: () => drawGrave(g.x * z + cx, g.y * z + cy, z) });
   for (const c of snap.citizens) {
     if (!inView(c.x, c.y) || !c.alive) continue;
     const x = (c.px + (c.x - c.px) * t) * z + cx;
@@ -558,6 +564,8 @@ function drawAltar(A, z, cx, cy, now) {
   }
 }
 function drawFire(z, cx, cy, now) {
+  // el fuego solo existe donde hubo ojos que lo vieran: campamento fundado y explorado
+  if (!map.campFounded || !fogSet.has(map.camp.y * map.w + map.camp.x)) return;
   const time = now / 1000;
   const fx = map.camp.x * z + cx, fy = map.camp.y * z + cy + z * .7;
   const g = Math.max(1, Math.round(z / 16));
@@ -1018,6 +1026,99 @@ function drawWaterFX(now) {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(fxCv, 0, 0, canvas.width, canvas.height);
 }
+
+// ===== niebla de guerra del espectador =====
+let fogSet = new Set();
+let fogMini = null, fogMiniCtx = null;
+const fogCv = document.createElement('canvas');
+const fogG = fogCv.getContext('2d');
+function initFog() {
+  fogSet = new Set(map.fogIdx || []);
+  fogMini = document.createElement('canvas');
+  fogMini.width = map.w; fogMini.height = map.h;
+  fogMiniCtx = fogMini.getContext('2d');
+  fogMiniCtx.fillStyle = 'rgba(7,12,22,1)';
+  fogMiniCtx.fillRect(0, 0, map.w, map.h);
+  for (const i of fogSet) fogMiniCtx.clearRect(i % map.w, (i / map.w) | 0, 1, 1);
+}
+function fogTick(newTiles) {
+  for (const i of newTiles || []) {
+    fogSet.add(i);
+    if (fogMiniCtx) fogMiniCtx.clearRect(i % map.w, (i / map.w) | 0, 1, 1);
+  }
+}
+// niebla REAL: bruma viva (ruido que deriva) sobre lo inexplorado, con borde emplumado hacia lo conocido
+function drawFog(now, z, cx, cy) {
+  const fpx = Math.max(2, Math.round(z / 8));
+  let fw = Math.ceil(canvas.width / fpx), fh = Math.ceil(canvas.height / fpx);
+  if (fw * fh > 420 * 260) { const s2 = Math.sqrt((fw * fh) / (420 * 260)); fw = Math.ceil(fw / s2); fh = Math.ceil(fh / s2); }
+  if (fogCv.width !== fw || fogCv.height !== fh) { fogCv.width = fw; fogCv.height = fh; }
+  const img = fogG.createImageData(fw, fh);
+  const d = img.data;
+  const time = now / 1000;
+  const HW = canvas.width / 2 / z, HH = canvas.height / 2 / z;
+  const stepT = (canvas.width / fw) / z; // tiles que cubre cada pixel de niebla
+  for (let j = 0; j < fh; j++) {
+    const wy = cam.y - HH + (j + 0.5) * stepT;
+    const ty = wy | 0;
+    for (let i = 0; i < fw; i++) {
+      const wx = cam.x - HW + (i + 0.5) * stepT;
+      const tx = wx | 0;
+      if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) continue;
+      const explored = fogSet.has(ty * map.w + tx);
+      if (explored) continue;
+      // niebla que respira: dos capas de ruido derivando lento
+      const n1 = vn(wx * 0.13 + time * 0.05, wy * 0.13 - time * 0.03, 91);
+      const n2 = vn(wx * 0.3 - time * 0.08, wy * 0.3 + time * 0.05, 92);
+      let a = 0.55 + n1 * 0.3 + n2 * 0.12; // 0.55..0.97
+      // borde emplumado: si un vecino ya fue explorado, la niebla se rinde suave
+      let edge = false;
+      for (let k = 0; k < 4 && !edge; k++) {
+        const ex = tx + [1, -1, 0, 0][k], ey = ty + [0, 0, 1, -1][k];
+        if (ex >= 0 && ey >= 0 && ex < map.w && ey < map.h && fogSet.has(ey * map.w + ex)) edge = true;
+      }
+      if (edge) a *= 0.45;
+      const o = (j * fw + i) * 4;
+      d[o] = 116; d[o + 1] = 130; d[o + 2] = 156; // bruma azulada
+      d[o + 3] = Math.min(235, a * 255) | 0;
+    }
+  }
+  fogG.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true; // suave: es bruma, no pixel-art
+  ctx.drawImage(fogCv, 0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
+}
+// maravillas visibles una vez exploradas: humo, fruta, ballena
+function drawWonder(wd, z, cx, cy, now) {
+  const px = wd.x * z + cx, py = wd.y * z + cy;
+  if (wd.kind === 'smoke') {
+    for (let k = 0; k < 7; k++) {
+      const ph = (now / 900 + k * 0.14) % 1;
+      ctx.fillStyle = `rgba(160,160,170,${0.35 * (1 - ph)})`;
+      ctx.beginPath(); ctx.arc(px + z * .5 + Math.sin(now / 500 + k) * z * .3 * ph, py - z * .5 - ph * z * 4, z * (.2 + ph * .5), 0, 7); ctx.fill();
+    }
+  } else if (wd.kind === 'fruit') {
+    for (let k = 0; k < 5; k++) {
+      const tw = 0.4 + Math.sin(now / 300 + k * 2) * 0.4;
+      ctx.fillStyle = `rgba(255,220,130,${tw})`;
+      ctx.fillRect(px + Math.sin(k * 2.4) * z * .8, py + Math.cos(k * 1.7) * z * .5, 3, 3);
+    }
+  } else if (wd.kind === 'whale') {
+    ctx.fillStyle = '#3a3f4a';
+    ctx.beginPath(); ctx.ellipse(px + z, py, z * 1.6, z * .6, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#4c5260';
+    ctx.beginPath(); ctx.ellipse(px + z, py - z * .15, z * 1.3, z * .35, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.25)';
+    for (let k = 0; k < 3; k++) { const ph = (now / 1100 + k * 0.33) % 1; ctx.fillRect(px + z + Math.sin(k * 3) * z, py - z * .4 - ph * z * 1.6, 2, 2); }
+  } else if (wd.kind === 'huellas') { // pisadas humanas que llevan a alguien
+    ctx.fillStyle = 'rgba(120,95,70,.85)';
+    for (let k = 0; k < 5; k++) {
+      ctx.beginPath();
+      ctx.ellipse(px + z * .3 + k * z * .22, py + Math.sin(k * 1.3) * z * .18, z * .07, z * .13, 0.5, 0, 7);
+      ctx.fill();
+    }
+  }
+}
 let boltSeed = 0;
 function drawWeather(now, dt) {
   const wt = snap.weather;
@@ -1085,6 +1186,7 @@ function drawRain(dt, mul = 1) {
 function drawMinimap() {
   mctx.imageSmoothingEnabled = false;
   mctx.drawImage(miniBase, 0, 0, mini.width, mini.height);
+  if (fogMini) { mctx.globalAlpha = 0.72; mctx.drawImage(fogMini, 0, 0, mini.width, mini.height); mctx.globalAlpha = 1; }
   for (const c of snap.citizens) {
     mctx.fillStyle = c.alive ? c.color : '#666';
     mctx.fillRect(c.x * 2 - 1, c.y * 2 - 1, 3, 3);
@@ -1153,7 +1255,7 @@ function updateRosterSide() {
   for (const c of snap.citizens) {
     const chip = $('chip-' + c.id); if (!chip) continue;
     chip.querySelector('.cstat').textContent = c.alive
-      ? `${c.maslowName} · ${actionLabel(c.action)}`
+      ? `${(snap.leaderId === c.id ? '👑 ' : '')}${c.maslowName} · ${actionLabel(c.action)}${c.inLoveWith ? ' 💗' : ''}`
       : `murió de ${c.deathCause || '…'}`;
     const bars = chip.querySelectorAll('.mini-bar i');
     const vals = [100 - c.needs.water, 100 - c.needs.food, c.needs.energy, c.needs.health];
@@ -1172,30 +1274,54 @@ function selectCitizen(id) {
   $('citizenCard').classList.remove('hidden');
   const pcv = $('ccPortrait');
   if (pcv && pcv.getContext) paintPortrait(pcv, c, 17);
-  $('ccName').textContent = c.name;
-  $('ccStage').textContent = c.alive ? `${c.maslowName} · ${actionLabel(c.action)}` : `† murió de ${c.deathCause}`;
+  $('ccName').textContent = (snap.leaderId === c.id ? '👑 ' : '') + c.name + (c.inLoveWith ? ' 💗' : '');
+  $('ccStage').textContent = c.alive ? (c.maslowName + ' · ' + actionLabel(c.action)) : ('† murió de ' + c.deathCause);
+  $('ccSubtitle').textContent = 'sueño: ' + c.ambition + (c.goal ? ' · meta actual: ' + c.goal : '');
   const tk2 = $('ccThink');
-  if (tk2) {
-    tk2.classList.toggle('hidden', !c.think);
-    tk2.textContent = c.think ? `piensa: “${c.think}”` : '';
-  }
-  const need = (label, v, color) => `<div class="need">${label}<div class="nb"><i style="width:${v}%;background:${color}"></i></div></div>`;
+  if (tk2) { tk2.classList.toggle('hidden', !c.think); tk2.textContent = c.think ? ('piensa: "' + c.think + '"') : ''; }
+  const need = (label, v, color) => '<div class="need">' + label + '<div class="nb"><i style="width:' + v + '%;background:' + color + '"></i></div></div>';
   $('ccNeeds').innerHTML =
     need('💧 hidratación', 100 - c.needs.water, '#5aa0e8') +
     need('🍖 saciedad', 100 - c.needs.food, '#e8a04f') +
     need('⚡ energía', c.needs.energy, '#e8d54f') +
-    need('❤ salud', c.needs.health, c.needs.health > 50 ? '#7fd98f' : '#ef8f8f');
+    need('❤ salud', c.needs.health, c.needs.health > 50 ? '#7fd98f' : '#ef8f8f') +
+    (c.temp != null ? '<div class="need">🌡 temperatura ' + c.temp + '°' + (c.temp < 36.2 ? ' 🥶 tiritando' : c.temp > 37.8 ? ' 🥵 acalorado' : ' bien') +
+      '<div class="nb"><i style="width:' + Math.round((c.temp - 35) / 4.5 * 100) + '%;background:#e88a5a"></i></div></div>' : '');
   const SK = { fish: '🎣', forage: '🫐', gather: '🪓', build: '🔨' };
-  $('ccSkills').innerHTML = Object.entries(c.skills).map(([k, v]) => `<span>${SK[k]} <b>${v}</b></span>`).join('');
-  const rels = Object.entries(c.relations || {}).map(([id, v]) => {
-    const o = snap.citizens.find((x) => x.id === id); if (!o) return '';
-    const heart = v >= 25 ? '💚' : v >= 5 ? '💛' : v > -15 ? '🤍' : '💔';
-    return `<span>${heart} ${o.name} ${v > 0 ? '+' : ''}${v}</span>`;
-  }).join(' · ');
-  $('ccRels').innerHTML = rels;
-  $('ccMem').innerHTML = c.lastMemories.length
-    ? 'recuerda: ' + c.lastMemories.join(' · ')
-    : 'todo es nuevo todavía…';
+  let emo = 'ánimo ' + c.mood + '/100 · ' + Object.entries(c.skills).map(([k, v]) => (SK[k] || k) + ' <b>' + v + '</b>').join(' ')
+    + (c.attrs ? ' · 💪' + c.attrs.fuerza + ' 🏃' + c.attrs.agilidad + ' 🧠' + c.attrs.inteligencia : '')
+    + (c.curiosity != null ? ' · 🔍 curiosidad ' + c.curiosity : '');
+  const EMO = { miedo: '😨', enojo: '😡', alegria: '😊', tristeza: '😢', amor: '❤️', celos: '😤', verguenza: '😳', orgullo: '😎', rencor: '🌑' };
+  const emos = Object.entries(c.emotions || {}).filter(([, v]) => v > 5).sort((a, b) => b[1] - a[1]);
+  if (emos.length) {
+    emo += '<br>' + emos.slice(0, 6).map(([k, v]) =>
+      '<span class="emo-chip">' + (EMO[k] || '•') + ' ' + k + ' <b>' + Math.round(v) + '</b></span>').join(' ');
+  }
+  $('ccSkills').innerHTML = emo;
+  const INV = { berries: '🫐 bayas', fish: '🐟 pescado', wood: '🪵 madera', stone: '🪨 piedra' };
+  const invItems = Object.entries(c.inventory || {}).filter(([, v]) => v > 0);
+  $('ccInv').innerHTML = invItems.length
+    ? invItems.map(([k, v]) => '<span class="inv-chip">' + (INV[k] || k) + ' ×' + v + '</span>').join(' ')
+      + (c.recipes && c.recipes.length ? '<br>recetas del DIOS: ' + c.recipes.join(', ') : '')
+    : 'vacía';
+  $('ccRels').innerHTML = Object.entries(c.relationsDetail || {}).map(([rid, r]) => {
+    const o = snap.citizens.find((x) => x.id === rid); if (!o) return '';
+    const heart = r.s >= 25 ? '💚' : r.s >= 5 ? '💛' : r.s > -15 ? '🤍' : '💔';
+    const love = c.inLoveWith === rid ? '💗' : '';
+    const evs = (r.ev || []).length ? '<div class="rel-ev">' + (r.ev || []).join(' · ') + '</div>' : '';
+    return '<div class="rel-row">' + heart + love + ' <b>' + o.name + '</b> (' + r.e + ') ' + (r.s > 0 ? '+' : '') + r.s + evs + '</div>';
+  }).join('') || 'aún no conoce a nadie en la isla';
+  $('ccConvos').innerHTML = (c.convoLog || []).length
+    ? c.convoLog.slice().reverse().map((x) => '<div class="convo-row"><b>d' + x.day + '</b> con <b>' + x.with + '</b>: “' + x.topic + '”</div>').join('')
+    : 'no habló con nadie todavía';
+  const PL = { peligro: '⚠️', agua: '💧', comida: '🫐', madera: '🪵', piedra: '🪨', refugio: '🏕️', tranquilo: '🌿' };
+  $('ccPlaces').innerHTML = (c.places || []).length
+    ? c.places.map((p2) => '<span class="place-chip">' + (PL[p2.k] || '📍') + ' ' + p2.k + (p2.note ? ' (' + p2.note + ')' : '') + '</span>').join(' ')
+    : 'todavía no marcó lugares';
+  $('ccThoughts').innerHTML = (c.thoughtLog || []).length
+    ? c.thoughtLog.slice().reverse().map((t) => '<div class="thought-row">“' + t.text + '” <i>— d' + t.d + (t.t != null ? ' ' + String(Math.floor(t.t / 12)).padStart(2, '0') + 'h' : '') + '</i></div>').join('')
+    : 'sus pensamientos aún son mudos';
+  $('ccMem').innerHTML = (c.lastMemories || []).length ? c.lastMemories.join(' · ') : 'todo es nuevo todavía…';
 }
 function setFollowChip(id) {
   document.querySelectorAll('.chip').forEach((ch) => ch.classList.remove('following'));
@@ -1231,6 +1357,7 @@ function enterIsland(data) {
   $('intro').classList.add('hidden');
   $('app').classList.remove('hidden');
   prepareWorld();
+  initFog();
   initAmbient();
   buildRosterSide(); updateRosterSide(); updateTopbar(); updateTicker();
   cam.x = map.camp.x; cam.y = map.camp.y;
@@ -1253,6 +1380,7 @@ es.addEventListener('tick', (ev) => {
   const data = JSON.parse(ev.data);
   const prev = snap;
   snap = data; snapAt = performance.now();
+  if (data.fogNew && data.fogNew.length) fogTick(data.fogNew);
   if (prev && prev.citizens.length !== data.citizens.length) buildRosterSide();
   updateRosterSide(); updateTopbar(); updateTicker();
   if (cam.follow && !$('citizenCard').classList.contains('hidden')) selectCitizen(cam.follow);

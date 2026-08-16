@@ -33,7 +33,12 @@ export function revealFog(c, world, weather = 'clear', tick = 100) {
   for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
     const x = c.pos.x + dx, y = c.pos.y + dy;
     if (x >= 0 && y >= 0 && x < world.w && y < world.h && dx * dx + dy * dy <= r * r) {
-      c.knownTiles.add(y * world.w + x);
+      const i = y * world.w + x;
+      c.knownTiles.add(i);
+      if (world.knownUnion && !world.knownUnion[i]) {
+        world.knownUnion[i] = 1;
+        if (world.newDiscovered.length < 400) world.newDiscovered.push(i);
+      }
     }
   }
 }

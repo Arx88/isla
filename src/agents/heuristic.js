@@ -45,11 +45,11 @@ export function createHeuristic() {
       const pickA = (ids) => ids.find(has);
       let actionId = null;
       if (urg.crisis === 'hard') {
-        actionId = pickA(urg.dominant === 'water' ? ['drink', 'explore']
-          : urg.dominant === 'food' ? ['eat', 'forage', 'fish', 'explore']
+        actionId = pickA(urg.dominant === 'water' ? ['drink', 'go_water', 'explore']
+          : urg.dominant === 'food' ? ['eat', 'forage', 'fish', 'go_water', 'steal', 'explore']
           : ['sleep', 'rest']);
       } else if (urg.crisis === 'soft' && rng.chance(0.95)) {
-        actionId = pickA(urg.dominant === 'water' ? ['drink']
+        actionId = pickA(urg.dominant === 'water' ? ['drink', 'go_water']
           : urg.dominant === 'food' ? ['eat', 'forage', 'fish']
           : ['rest', 'sleep']);
       }

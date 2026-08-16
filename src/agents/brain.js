@@ -36,6 +36,7 @@ ${recentActions.length ? recentActions.join('\n') : 'todavia no hiciste nada en 
 
 TU HISTORIA RECIENTE Y VINCULOS:
 ${memoryWords.length ? memoryWords.join('\n') : 'Todo es nuevo para ti: acabas de llegar a la isla.'}
+${ctx.mapLine ? '\n' + ctx.mapLine : ''}${ctx.dangerLine ? '\n' + ctx.dangerLine : ''}
 
 MOMENTO: dia ${time.day}, ${hhmm(time.tick)}${time.night ? ' (es de noche: casi no ves mas alla de unos pasos)' : ''}. Clima: ${weather}. Etapa de vida: ${maslowName}.
 ${soledad}

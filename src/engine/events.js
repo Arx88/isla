@@ -11,7 +11,7 @@ function dirName(from, to) {
 }
 
 export function createEvents() {
-  const state = { lastNightSound: -999, smoke: false, whale: false, boat: false, fruits: 0 };
+  const state = { lastNightSound: -999, smoke: false, whale: false, boat: false, fruits: 0, lastSignal: -999 };
   return {
     tick(sim) {
       const alive = sim.citizens.filter((c) => c.alive);
@@ -109,6 +109,30 @@ export function createEvents() {
           remember(c, { kind: 'vision', text: 'vio un barco en el horizonte que se alejo', salience: 4, emotion: -3 });
           addEmotion(c, 'tristeza', 8, 'el barco que se fue');
         }
+      }
+
+      // senales de vida: huellas frescas de OTRA PERSONA apuntan hacia los que aun no conoces
+      if (sim.day >= 2 && sim.abs - state.lastSignal > 420 && sim.rng.chance(0.01)) {
+        const w = sim.world;
+        let someoneGotSignal = false;
+        for (const c of alive) {
+          const unmet = alive.filter((o) => o.id !== c.id && !(c.met || []).has(o.id));
+          if (!unmet.length) continue;
+          const o = unmet[Math.floor(sim.rng.next() * unmet.length)];
+          const d = Math.round(Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y));
+          sim.emit('misterio', `${c.name} encuentra HUELLAS frescas en la arena. De persona. Alguien mas vive en esta isla, ${dirName(c.pos, o.pos)}.`, 4);
+          addFact(c, `hay huellas de otra persona ${dirName(c.pos, o.pos)} (~${d} pasos): no esta solo`);
+          remember(c, { kind: 'misterio', text: `hallo huellas humanas ${dirName(c.pos, o.pos)}`, salience: 4, emotion: 3 });
+          c.curiosity = Math.min(100, (c.curiosity || 0) + 35);
+          addEmotion(c, 'alegria', 8, 'saber que no esta solo');
+          w.wonders.push({
+            x: Math.round((c.pos.x + o.pos.x) / 2 + (sim.rng.next() - 0.5) * 20),
+            y: Math.round((c.pos.y + o.pos.y) / 2 + (sim.rng.next() - 0.5) * 16),
+            kind: 'huellas', day: sim.day, seen: false,
+          });
+          someoneGotSignal = true;
+        }
+        if (someoneGotSignal) state.lastSignal = sim.abs;
       }
 
       // jabalies que bajan al campamento y arruinan la comida

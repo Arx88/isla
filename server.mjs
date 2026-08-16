@@ -103,23 +103,38 @@ function snapshot(full = false) {
       mood: Math.round(c.mood), maslow: c.maslow, maslowName: MASLOW[c.maslow],
       action: c.action ? c.action.id : null, say: (c.visualSay && sim.abs <= c.visualSay.until) ? c.visualSay.text : null,
       think: (c.visualThink && sim.abs <= c.visualThink.until) ? c.visualThink.text : null,
+      emotions: Object.fromEntries(Object.entries(c.emotions || {}).filter(([, v]) => v > 3).map(([k, v]) => [k, Math.round(v)])),
+      attrs: c.attrs || null, temp: Math.round((c.temp || 36.8) * 10) / 10, goal: c.currentGoal || null,
+      inLoveWith: c.inLoveWith || null, curiosity: Math.round(c.curiosity || 0),
+      thoughts: (c.thoughtLog || []).slice(-3).map((t) => t.text),
+      thoughtLog: (c.thoughtLog || []).slice(-8).map((t) => ({ d: t.day, t: t.tick, text: t.text })),
+      convoLog: (c.convoLog || []).slice(-6).map((x) => ({ with: x.with, day: x.day, topic: x.topic })),
+      relationsDetail: Object.fromEntries(Object.entries(c.memory.relations).slice(0, 9).map(([id, r]) => [id, { s: Math.round(r.score), e: r.epithet, ev: (r.events || []).slice(-3) }])),
+      places: Object.values(c.memory.places || {}).slice(0, 8).map((p) => ({ x: p.x, y: p.y, k: p.k, note: p.note })),
+      met: c.met ? [...c.met] : [],
       skills: Object.fromEntries(Object.entries(c.skills).map(([k, v]) => [k, Math.round(v)])),
       inventory: c.inventory, recipes: c.knownRecipes.map((r) => r.id), ambition: c.ambition,
       relations: Object.fromEntries(Object.entries(c.memory.relations).map(([id, r]) => [id, Math.round(r.score)])),
       lastMemories: c.memory.recent.slice(-3).map((m) => m.text),
     })),
     animals: w.animals.map((a) => ({ t: a.type, x: Math.round(a.x * 10) / 10, y: Math.round(a.y * 10) / 10, tx: Math.round(a.tx * 10) / 10, ty: Math.round(a.ty * 10) / 10 })),
+    leaderId: sim.leaderId || null,
+    fogNew: w.newDiscovered ? w.newDiscovered.splice(0) : [],
     events: sim.events.slice(-40).map((e, i) => ({ ...e, key: sim.events.length - Math.min(40, sim.events.length) + i })),
   };
   if (full) {
+    const fogIdx = [];
+    if (w.knownUnion) for (let i = 0; i < w.knownUnion.length; i++) if (w.knownUnion[i]) fogIdx.push(i);
     base.map = {
       w: w.w, h: w.h, biome: Array.from(w.biome), fertile: Array.from(w.fertile),
-      camp: w.camp, buildings: w.buildings, waterfalls: w.waterfalls,
+      camp: w.camp, campFounded: !!w.campFounded, buildings: w.buildings, waterfalls: w.waterfalls,
+      wonders: (w.wonders || []).map((x) => ({ x: x.x, y: x.y, kind: x.kind, seen: x.seen })),
       bushes: w.bushes.map((b) => ({ x: b.x, y: b.y, a: b.amount })),
       trees: w.trees.map((t) => ({ x: t.x, y: t.y, a: t.amount })),
       stones: w.stones.map((s) => ({ x: s.x, y: s.y, a: s.amount })),
       water: w.waterSources.map((s) => ({ x: s.x, y: s.y, k: s.kind, fx: s.fx || 0, fy: s.fy || 1 })),
       graves: w.graves,
+      fogIdx,
     };
   }
   return base;

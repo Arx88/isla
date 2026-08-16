@@ -3,7 +3,7 @@ import { generateWorld, tickAnimals, passable } from './worldgen.js';
 import { mulberry32, clamp } from './util.js';
 import { updateBody, bodyWords, urgency, maslowLayer, MASLOW_NAME, isNight, TICKS_PER_DAY, mkSkills, skillWords,
   mkEmotions, addEmotion, decayEmotions, dominantEmotion, emotionWords, updateTemp, rollAttributes } from './body.js';
-import { remember, memoryWords, addFact } from './memory.js';
+import { remember, memoryWords, addFact, markPlace, placesWords, dangerNear } from './memory.js';
 import { perceive, perceptionWords, revealFog } from './perception.js';
 import { allowedActions, restrictByCrisis, startAction, stepAction, CATALOG } from './actions.js';
 import { contextKey, habitFor, recordOutcome, decayHabits } from './habits.js';
@@ -12,18 +12,20 @@ import { startConversation, tickConversations } from './dialogue.js';
 import { createEvents } from './events.js';
 import { createHeuristic } from '../agents/heuristic.js';
 
-export function createCitizen(def, world, i) {
+export function createCitizen(def, world, i, total) {
   const c = {
     id: def.id || `c${i}`, name: def.name, instructivo: def.instructivo, ambition: def.ambition,
     ambitionKey: def.ambitionKey || '', traits: Object.assign({ estoico: 0, ansioso: 0, devoto: 0, sociable: 0, trabajador: 0 }, def.traits),
-    pos: spawnSpot(world, i),
+    pos: spawnSpot(world, i, total || 1),
     needs: { water: 55, food: 45, energy: 80, health: 100 },
     mood: 68, moodBias: 0, sick: 0, skills: mkSkills(),
     emotions: mkEmotions(), temp: 36.8, attrs: def.attrs || rollAttributes(def.name + def.id + (i + 1)),
     thoughtLog: [], currentGoal: null, inLoveWith: null,
     inventory: { berries: 1, fish: 0, wood: 0, stone: 0 },
-    memory: { recent: [], relations: {}, facts: [] },
-    habits: {}, knownRecipes: [], blessings: [], knownTiles: new Set(),
+    memory: { recent: [], relations: {}, facts: [], places: {} },
+    met: new Set(), knowsCamp: false, convoLog: [],
+    habits: {}, knownRecipes: [], blessings: [], knownTiles: new Set(), knownWaters: [],
+    stickyExplore: null,
     action: null, inConversation: null, lastSays: [],
     stats: { convos: 0, prayers: 0, crafts: 0, godAnswered: 0, ambitionDone: false },
     actionLog: [], _streak: { id: null, n: 0 }, lastConvoAbs: -288, curiosity: 20, lastExploreAbs: 71,
@@ -52,38 +54,46 @@ function arrivalMemory(c, world) {
     return best && bd <= maxD ? { e: best, d: Math.round(bd) } : null;
   };
   const w = mark(world.waterSources.filter((s) => s.kind === 'rio'), 25);
-  if (w) { c.knownTiles.add(w.e.y * world.w + w.e.x); addFact(c, `del naufragio recuerda agua dulce ${dirName(w.e)} (~${w.d} pasos)`); }
+  if (w) {
+    c.knownTiles.add(w.e.y * world.w + w.e.x);
+    c.knownWaters.push({ x: w.e.x, y: w.e.y });
+    addFact(c, `del naufragio recuerda agua dulce ${dirName(w.e)} (~${w.d} pasos)`);
+  }
   const b = mark(world.bushes, 14); if (b) c.knownTiles.add(b.e.y * world.w + b.e.x);
   const t = mark(world.trees, 14); if (t) c.knownTiles.add(t.e.y * world.w + t.e.x);
   const s = mark(world.stones, 18); if (s) c.knownTiles.add(s.e.y * world.w + s.e.x);
 }
 
-// punto de spawn seguro alrededor del campamento (anillos concéntricos, celda única por naufrago)
-function spawnSpot(world, i) {
-  const pass = (x, y) => {
-    const b = world.biome[y * world.w + x];
-    return !(b <= 2 || b === 8 || b === 9 || b === 14);
-  };
-  const seen = new Set();
-  const spots = [];
-  for (let r = 1; r <= 9 && spots.length <= i; r++) {
-    for (let a = 0; a < 16 && spots.length <= i; a++) {
-      const x = Math.round(world.camp.x + Math.cos(a / 16 * 6.283) * r);
-      const y = Math.round(world.camp.y + Math.sin(a / 16 * 6.283) * r * 0.7);
-      if (x < 1 || y < 1 || x >= world.w - 1 || y >= world.h - 1) continue;
-      const key = x + ',' + y;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (pass(x, y)) spots.push({ x, y });
+// varadero: cada naufrago despierta SOLO, en una desembocadura distinta de la isla (lo mas lejos posible entre si)
+function spawnSpot(world, i, total) {
+  const mouths = world.riverMouths && world.riverMouths.length ? world.riverMouths : null;
+  if (!mouths) return { x: world.camp.x + (i % 5) - 2, y: world.camp.y + 1 };
+  // elegir desembocaduras maximizando distancia entre elegidas (y del centro)
+  const chosen = [];
+  for (let k = 0; k < total; k++) {
+    let best = null, bestD = -1;
+    for (const m of mouths) {
+      const dMin = chosen.length ? Math.min(...chosen.map((c) => Math.hypot(c.x - m.x, c.y - m.y))) : 1e9;
+      if (dMin > bestD) { bestD = dMin; best = m; }
+    }
+    chosen.push(best || mouths[k % mouths.length]);
+  }
+  const m = chosen[i];
+  // pararse en la arena al lado de la desembocadura
+  for (let r = 1; r <= 4; r++) {
+    for (let a = 0; a < 12; a++) {
+      const x = Math.round(m.x + Math.cos(a / 12 * 6.283) * r);
+      const y = Math.round(m.y + Math.sin(a / 12 * 6.283) * r);
+      if (passable(world, x, y)) return { x, y };
     }
   }
-  return spots[i] || { x: world.camp.x + (i % 5) - 2, y: world.camp.y + 1 };
+  return { x: m.x, y: m.y + 1 };
 }
 
 export function createSim(cfg) {
   const rng = mulberry32(cfg.seed || 42);
   const world = generateWorld(cfg.seed || 42, { w: cfg.mapW || 448, h: cfg.mapH || 256 });
-  const citizens = cfg.citizens.map((d, i) => createCitizen(d, world, i));
+  const citizens = cfg.citizens.map((d, i) => createCitizen(d, world, i, cfg.citizens.length));
   const heuristic = createHeuristic();
   const provider = cfg.provider || heuristic;
   const sim = {
@@ -145,7 +155,10 @@ export function createSim(cfg) {
     },
   };
 
-  sim.emit('llegada', `Dia 1: ${citizens.map((c) => c.name).join(', ')} despiertan varados en una isla desconocida. ${citizens.length} sobrevivientes.`, 5);
+  sim.emit('llegada', `Dia 1: la tormenta arroja a ${citizens.length} naufragos a distintas costas de la isla. Cada uno despierta solo, sin saber de los demas.`, 5);
+  for (const c of citizens) {
+    sim.emit('llegada', `${c.name} despierta empapado en una playa desconocida, junto al desague de un arroyo.`, 3);
+  }
   return sim;
 }
 
@@ -171,13 +184,68 @@ export async function simTick(sim) {
     if (sim.weather === 'storm') addEmotion(c, 'miedo', 0.5, 'la tormenta');
     if (c.needs.health < 35) addEmotion(c, 'miedo', 0.6, 'el cuerpo que falla');
     if (c.needs.food > 92) addEmotion(c, 'tristeza', 0.3, 'el hambre que muerde');
-    // curiosidad: crece cuando la vida se vuelve puro tramite; explorar la sacia
-    if (!isNight(sim.tick)) c.curiosity = Math.min(100, (c.curiosity || 0) + 0.28);
+    // curiosidad: rasgo de personalidad (el loco la tiene al maximo, el pragmatico casi nada)
+    // crece solo cuando el cuerpo no grita: nunca compite contra la supervivencia
+    if (!isNight(sim.tick) && c.needs.water < 80 && c.needs.food < 80) {
+      const curio = 0.1 + (1 - (c.traits.estoico || 0)) * 0.1 + ((c.traits.curioso != null ? c.traits.curioso : 0.5)) * 0.2;
+      c.curiosity = Math.min(100, (c.curiosity || 0) + curio);
+    }
+    // PRIMER ENCUENTRO: ver a otro ser humano en esta isla (cada uno llego solo)
+    for (const o of sim.citizens) {
+      if (o.id === c.id || !o.alive || c.met.has(o.id)) continue;
+      if (Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y) > 6) continue;
+      c.met.add(o.id); o.met.add(c.id);
+      const scared = c.traits.ansioso > 0.5;
+      addEmotion(c, scared ? 'miedo' : 'alegria', scared ? 20 : 25, `ver a ${o.name}`);
+      addEmotion(o, o.traits.ansioso > 0.5 ? 'miedo' : 'alegria', o.traits.ansioso > 0.5 ? 20 : 25, `ver a ${c.name}`);
+      remember(c, { kind: 'encuentro', text: `encontro a ${o.name} en la isla`, salience: 5, emotion: 5 });
+      remember(o, { kind: 'encuentro', text: `encontro a ${c.name} en la isla`, salience: 5, emotion: 5 });
+      c.visualSay = { text: `¿${o.name}? ¡hay alguien mas!`, until: sim.abs + 5 };
+      o.visualSay = { text: '¿vos sos real?', until: sim.abs + 5 };
+      sim.emit('vinculo', `PRIMER ENCUENTRO: ${c.name} y ${o.name} se cruzan por primera vez. Ninguno sabia del otro.`, 5);
+    }
+    // estar cerca de una zona que recuerda peligrosa: el cuerpo se tensa
+    if (!c._nearDangerTick || sim.abs - c._nearDangerTick > 40) {
+      const dz = dangerNear(c, c.pos.x, c.pos.y, 7);
+      if (dz) {
+        c._nearDangerTick = sim.abs;
+        addEmotion(c, 'miedo', 8, `pasar cerca de ${dz.note || 'la zona peligrosa'}`);
+        c._nearDanger = dz.note || 'una zona que recuerda peligrosa';
+      }
+    }
+    // pesadillas a la intemperie con miedo: el sueno de un naufrago no es tranquilo
+    if (c.action && c.action.id === 'sleep' && !sim.world.buildings.shelter.done
+      && (c.emotions.miedo || 0) > 55 && sim.rng.chance(0.01)) {
+      sim.emit('sueno', `${c.name} se agita dormido: pesadillas con la tormenta y el mar`, 2);
+      c.visualSay = { text: 'no... el agua no...', until: sim.abs + 4 };
+      addEmotion(c, 'tristeza', 6, 'pesadillas');
+    }
+    // descubrir un campamento ya fundado por otro (pasas cerca y lo ves)
+    if (sim.world.campFounded && !c.knowsCamp
+      && Math.hypot(c.pos.x - sim.world.camp.x, c.pos.y - sim.world.camp.y) < 8) {
+      c.knowsCamp = true;
+      addFact(c, `encontro el campamento que fundo ${sim.world.buildings.shelter.founder || 'otro naufrago'}`);
+      remember(c, { kind: 'descubrimiento', text: 'encontro el campamento de los otros', salience: 4, emotion: 6 });
+      sim.emit('descubrimiento', `${c.name} encuentra el campamento de ${sim.world.buildings.shelter.founder || 'los otros'}`, 4);
+    }
     if (c._lpx !== c.pos.x || c._lpy !== c.pos.y) { revealFog(c, sim.world, sim.weather, sim.tick); c._lpx = c.pos.x; c._lpy = c.pos.y; }
     if (c.needs.water >= 95 || c.needs.food >= 95 || c.needs.health < 50) sim.metrics.nearDeathTicks++;
     if (c.needs.health <= 0) { die(sim, c); continue; }
     if (c.inConversation) continue;
 
+    if (c.action) {
+      // INTERRUPCION POR CRISIS: el cuerpo grita y se abandona lo que se hacia
+      // (solo se respetan beber/ir por agua/comer ahora, o forrajear/pescar ya EN CURSO)
+      const uNow = urgency(c);
+      const sacred = ['drink', 'go_water', 'eat'].includes(c.action.id)
+        || (c.action.phase === 'work' && ['forage', 'fish'].includes(c.action.id));
+      if (uNow.crisis === 'hard' && !sacred) {
+        sim.emit('fallo', `${c.name} corta de golpe lo que hacia: necesita ${uNow.dominant === 'water' ? 'beber' : uNow.dominant === 'food' ? 'comer' : 'descansar'} YA`, 2);
+        c.visualSay = { text: uNow.dominant === 'water' ? 'agua... AHORA' : uNow.dominant === 'food' ? 'tengo que comer ya' : 'no doy mas', until: sim.abs + 4 };
+        c.action = null;
+        c._streak = { id: null, n: 0 };
+      }
+    }
     if (c.action) {
       const prevId = c.action.id, hKey = c.action.habitKey;
       const evt = await stepAction(sim, c);
@@ -201,22 +269,26 @@ export async function simTick(sim) {
   separateCitizens(sim);
 }
 
-// nadie se para literalmente arriba de otro: si dos almas caen en la misma celda, una se aparta
+// nadie se para encima de otro: solo se apartan los que estan quietos (empujar a quien camina crea rebote infinito)
 function separateCitizens(sim) {
   const alive = sim.citizens.filter((c) => c.alive);
   const cell = new Map();
   for (const c of alive) {
+    // quien esta caminando hacia un objetivo no se empuja (se apilan un instante y listo)
+    if (c.action && c.action.phase === 'walk') continue;
     const key = Math.round(c.pos.x) + ',' + Math.round(c.pos.y);
-    if (cell.has(key)) {
-      const dxs = [1, -1, 0, 0], dys = [0, 0, 1, -1];
-      for (let i = 0; i < 4; i++) {
-        const nx = c.pos.x + dxs[i], ny = c.pos.y + dys[i];
-        if (passable(sim.world, nx, ny) && !(nx === c.pos.x && ny === c.pos.y)) {
-          c.pos.x = nx; c.pos.y = ny;
-          break;
-        }
+    if (!cell.has(key)) { cell.set(key, c); continue; }
+    // empujar solo al que no hace nada en particular
+    const idle = !c.action || c.action.id === 'rest' ? c : null;
+    if (!idle) continue;
+    const dxs = [1, -1, 0, 0], dys = [0, 0, 1, -1];
+    for (let i = 0; i < 4; i++) {
+      const nx = c.pos.x + dxs[i], ny = c.pos.y + dys[i];
+      if (passable(sim.world, nx, ny) && !(nx === c.pos.x && ny === c.pos.y)) {
+        c.pos.x = nx; c.pos.y = ny;
+        break;
       }
-    } else cell.set(key, c);
+    }
   }
 }
 
@@ -235,9 +307,15 @@ async function decideNext(sim, c) {
   per.shelterDone = sim.world.buildings.shelter.done;
   per.altarDone = sim.world.buildings.altar.done;
   sim.perCache[c.id] = per;
-  // bestia cerca: miedo de golpe
+  // registrar aguas conocidas (para poder VOLVER cuando la sed aprieta lejos)
+  if (per.cleanWater && !c.knownWaters.some((k) => Math.hypot(k.x - per.cleanWater.x, k.y - per.cleanWater.y) < 3)) {
+    c.knownWaters.push({ x: per.cleanWater.x, y: per.cleanWater.y });
+    if (c.knownWaters.length > 6) c.knownWaters.shift();
+  }
+  // bestia cerca: miedo de golpe + se marca la zona como peligrosa en SU mapa mental
   if (per.danger && (c._lastFearTick || -99) < sim.abs - 30) {
     addEmotion(c, 'miedo', 18, per.danger.type === 'boar' ? 'un jabali cerca' : 'una serpiente cerca');
+    markPlace(c, c.pos.x, c.pos.y, 'peligro', per.danger.type === 'boar' ? 'jabalies' : 'serpientes');
     c._lastFearTick = sim.abs;
   }
 
@@ -284,8 +362,8 @@ async function decideNext(sim, c) {
   const SATISFY = ['drink', 'eat', 'sleep', 'rest', 'forage', 'fish'];
   let menuB = (!urg.crisis && c._streak.n >= 4 && !SATISFY.includes(c._streak.id))
     ? menuH.filter((m) => m.id !== c._streak.id) : menuH;
-  // curiosidad alta: explorar se vuelve casi obligatorio (sale una vez por decision)
-  if (!urg.crisis && c.curiosity > 75) {
+  // curiosidad alta: explorar se vuelve casi obligatorio (nunca durante crisis: primero se vive)
+  if (!urg.crisis && c.needs.water < 75 && c.needs.food < 75 && c.curiosity > 75) {
     const idxExpl = menuB.findIndex((m) => m.id === 'explore');
     if (idxExpl < 0) menuB = menuB.concat([{ id: 'explore', desc: 'explorar hacia lo desconocido (la curiosidad no te deja en paz)' }]);
   }
@@ -299,6 +377,9 @@ async function decideNext(sim, c) {
     ? 'Sentis un llamado espiritual fuerte: levantar el altar del DIOS (build_altar) es tu mision.' : null;
   const curiosityLine = (c.curiosity > 55)
     ? `La curiosidad te corroe (${Math.round(c.curiosity)}/100): queda mapa sin ver y misterios sin resolver. Salir a explorar (explore) te haria bien.` : null;
+  const mapLine = placesWords(c);
+  const dangerLine = c._nearDanger && sim.abs - (c._nearDangerTick || 0) < 60
+    ? `Estas cerca de ${c._nearDanger}: mantenete alerta.` : null;
   const emoDetail = Object.entries(c.emotions).filter(([, v]) => v > 40)
     .map(([k, v]) => `${k} ${Math.round(v)}/100`).join(', ');
   const emoLine = `ESTADO EMOCIONAL: estas ${emotionWords(c)}${c._lastEmoWhy ? ` — ultima causa: ${c._lastEmoWhy}` : ''}${emoDetail ? ` (${emoDetail})` : ''}`;
@@ -308,7 +389,7 @@ async function decideNext(sim, c) {
     c, menu, urg, per, rng: sim.rng, traits: c.traits, maslow: c.maslow,
     recentActions: c.actionLog.slice(-4).map((a) => `${a.id}${a.text ? ` (${a.text})` : ''}`),
     islandRecent: sim.metrics.says.slice(-10),
-    soledad, vocacion, curiosityLine, chosenAction: null,
+    soledad, vocacion, curiosityLine, chosenAction: null, mapLine, dangerLine,
     emotionLine: emoLine + loveLine, temperatureLine: c.temp < 36.2 ? 'estas TIRITANDO de frio' : c.temp > 37.8 ? 'el calor te agota' : null,
     goalLine: c.currentGoal ? `TU PROPOSITO ACTUAL: ${c.currentGoal}` : null, leaderLine,
     skillWords: skillWords(c),
@@ -319,6 +400,8 @@ async function decideNext(sim, c) {
     weather: ({ clear: 'despejado', cloudy: 'nublado', rain: 'lluvia', storm: 'tormenta con truenos', heat: 'ola de calor abrasadora', fog: 'niebla espesa que corta la vision' })[sim.weather] || 'despejado',
     maslowName: MASLOW_NAME[c.maslow] || 'sobreviviendo',
   };
+  if (mapLine) ctx.mapLine = mapLine;
+  if (dangerLine) ctx.dangerLine = dangerLine;
   // deliberacion: SOLO el LLM decide. Reintenta hasta 3 veces; nunca decide el heuristico.
   let decision = null;
   let curMenu = menu;
@@ -367,7 +450,7 @@ async function decideNext(sim, c) {
   if (decision.think) {
     c.visualThink = { text: decision.think, until: sim.abs + 10 };
     c.thoughtLog.push({ day: sim.day, tick: sim.tick, text: decision.think });
-    if (c.thoughtLog.length > 6) c.thoughtLog.shift();
+    if (c.thoughtLog.length > 12) c.thoughtLog.shift();
   }
   // meta personal declarada por el propio agente (dura 2 dias)
   if (decision.goal && String(decision.goal).length < 90) { c.currentGoal = String(decision.goal); c.currentGoalDay = sim.day; }
@@ -424,7 +507,7 @@ async function endOfDay(sim, final = false) {
     } else if ((fert && sim.day % 2 === 0) || (!fert && sim.day % 4 === 0)) b.amount = Math.min(b.max ?? 2, b.amount + 1);
   }
   // conciencia del agotamiento: si cerca del campamento ya casi no queda nada, todos se enteran
-  {
+  if (sim.world.campFounded) {
     const near = sim.world.bushes.filter((b) => Math.hypot(b.x - sim.world.camp.x, b.y - sim.world.camp.y) < 20);
     const left = near.reduce((s, b) => s + b.amount, 0);
     if (near.length && left <= 1 && !sim.world._campEmptyNoted) {
@@ -451,9 +534,13 @@ async function endOfDay(sim, final = false) {
         if (!c.memory.facts.some((f) => f.includes('pudre'))) addFact(c, 'la comida se pudre rapido en la isla: comerla, regalarla o conservarla con ayuda del DIOS');
       }
     }
-  // maslow + ambiciones
+  // maslow + ambiciones + mapa mental del sueno seguro
   for (const c of sim.citizens) {
     if (!c.alive) continue;
+    // dormi una noche sin sustos y sin zona peligrosa cerca: este lugar es seguro
+    if (c.action && c.action.id === 'sleep' && !dangerNear(c, c.pos.x, c.pos.y, 9)) {
+      markPlace(c, c.pos.x, c.pos.y, 'tranquilo', 'se duerme tranquilo');
+    }
     checkAmbition(sim, c);
     const layer = maslowLayer(c, sim.world, sim.citizens);
     if (layer > c.maslow) {

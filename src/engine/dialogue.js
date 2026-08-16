@@ -97,8 +97,30 @@ function endConversation(sim, convo, note) {
   convo.a.inConversation = null; convo.b.inConversation = null;
   convo.a.lastConvoAbs = sim.abs; convo.b.lastConvoAbs = sim.abs;
   convo.a.stats.convos++; convo.b.stats.convos++;
-  if (sim.romanceCheck) sim.romanceCheck(convo.a.id, convo.b.id);
+  // registro de conversaciones para el expediente de cada uno
   const topic = convo.lines.length ? convo.lines[convo.lines.length - 1].text.slice(0, 40) : 'cosas de la isla';
+  for (const [self, other] of [[convo.a, convo.b], [convo.b, convo.a]]) {
+    self.convoLog.push({ with: other.name, day: sim.day, topic });
+    if (self.convoLog.length > 8) self.convoLog.shift();
+  }
+  // transmision de conocimiento: el que sabe donde esta el campamento, se lo cuenta al otro
+  const w = sim.world;
+  for (const [knower, learner] of [[convo.a, convo.b], [convo.b, convo.a]]) {
+    if (w.campFounded && knower.knowsCamp && !learner.knowsCamp) {
+      learner.knowsCamp = true;
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        const x = w.camp.x + dx, y = w.camp.y + dy;
+        if (x >= 0 && y >= 0 && x < w.w && y < w.h && dx * dx + dy * dy <= 18) {
+          const i = y * w.w + x;
+          learner.knownTiles.add(i);
+          if (w.knownUnion && !w.knownUnion[i]) { w.knownUnion[i] = 1; if (w.newDiscovered.length < 400) w.newDiscovered.push(i); }
+        }
+      }
+      remember(learner, { kind: 'conocimiento', text: `${knower.name} le conto donde esta el campamento`, salience: 4, emotion: 4 });
+      sim.emit('conocimiento', `${knower.name} le cuenta a ${learner.name} donde queda el campamento`, 3);
+    }
+  }
+  if (sim.romanceCheck) sim.romanceCheck(convo.a.id, convo.b.id);
   // memorias divergentes: cada uno resume con su propio sesgis
   remember(convo.a, { kind: 'charla', text: `charlo con ${convo.b.name} sobre "${topic}"`, salience: 1, emotion: +2 });
   remember(convo.b, { kind: 'charla', text: `hable con ${convo.a.name}; me quedo con otra impresion de lo que dijo`, salience: 1, emotion: +2 });

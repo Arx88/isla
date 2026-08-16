@@ -15,15 +15,24 @@ export function updateBody(c, { tick, raining, shelterDone = true, weather = 'cl
   const night = isNight(tick);
   const sleeping = c.action && c.action.id === 'sleep';
   const heat = weather === 'heat';
-  // sed y hambre: suben siempre; de noche mas lento; lluvia hidrata; ola de calor deshidrata x1.5
-  const wMul = heat ? 1.5 : 1;
-  c.needs.water = clamp(c.needs.water + (night ? 0.25 : 0.55) * wMul - (raining && !sleeping ? 0.15 : 0), 0, 100);
-  c.needs.food = clamp(c.needs.food + (night ? 0.11 : 0.18), 0, 100);
+  // sed y hambre calibradas para dejar VIVIR: sed ~24h hasta morir, hambre ~3 dias
+  // (si la supervivencia lo es todo, el menu colapsa a 3 acciones y nadie vive: hay que dejar margen)
+  const wMul = heat ? 1.4 : 1;
+  c.needs.water = clamp(c.needs.water + (night ? 0.13 : 0.26) * wMul - (raining && !sleeping ? 0.15 : 0), 0, 100);
+  c.needs.food = clamp(c.needs.food + (night ? 0.07 : 0.115), 0, 100);
   // noches frias a la intemperie (antes del refugio) desgastan; tormenta de noche, peor
   if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - (weather === 'storm' ? 0.16 : 0.08), 0, 100);
   // energia
   if (sleeping) {
-    c.needs.energy = clamp(c.needs.energy + 0.95 * (c.blessings.includes('bed') ? 1.3 : 1), 0, 100);
+    // dormir a la intemperie no es dormir tranquilo: el miedo desvela, la compaia calma
+    let regen = 0.95 * (c.blessings.includes('bed') ? 1.3 : 1);
+    if (!shelterDone) {
+      const fear = (c.emotions && c.emotions.miedo) || 0;
+      const company = (c._others || []).some((o) => o.alive && Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y) < 7);
+      regen -= fear > 40 ? 0.28 : 0.12;
+      if (company) regen += 0.12;
+    }
+    c.needs.energy = clamp(c.needs.energy + regen, 0, 100);
   }
   else {
     const active = c.action && c.action.id !== 'rest';
