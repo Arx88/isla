@@ -6,36 +6,52 @@ export function hhmm(tick) {
 }
 
 export function buildDecisionMessages(ctx) {
-  const { c, bodyWords, perceptionWords, memoryWords, menu, urg, time, weather, maslowName } = ctx;
+  const { c, bodyWords, perceptionWords, memoryWords, menu, urg, time, weather, maslowName, recentActions, skillWords } = ctx;
   const menuTxt = menu.map((m) => `- ${m.id}: ${m.desc}`).join('\n');
   const tension = urg.crisis === 'hard' ? `TU CUERPO GRITA: necesitas ${urg.dominant} YA. Solo acciones que lo resuelvan tienen sentido.`
     : urg.crisis === 'soft' ? `Hay una incomodidad creciente (${urg.dominant}) que deberias atender pronto.` : 'No hay urgencias fisicas: podes elegir con libertad.';
-  const noRepeat = c.lastSays.length ? `Frases que ya dijiste (NO las repitas ni parecidas): ${c.lastSays.slice(-5).map((s) => `"${s}"`).join('; ')}` : '';
-  const system = `Sos la mente de ${c.name}, un naufrago en una isla. NO sos narrador: decidis como decidiria ${c.name}.
+  const noRepeat = c.lastSays.length ? `Frases que ya dijiste (PROHIBIDO repetirlas ni hacer variantes trivialmente iguales): ${c.lastSays.slice(-5).map((s) => `"${s}"`).join('; ')}` : '';
+  const islandRecent = (ctx.islandRecent && ctx.islandRecent.length)
+    ? `\nULTIMAS FRASES OYERON EN LA ISLA (no las digas ni parecidas): ${ctx.islandRecent.slice(-8).map((s) => `"${s}"`).join('; ')}` : '';
+  const soledad = ctx.soledad || ctx.vocacion ? `\n${[ctx.soledad, ctx.vocacion].filter(Boolean).join(' ')}` : '';
+  const system = `Sos la mente de ${c.name}, un naufrago en una isla. NO sos narrador ni estratega: decidis y hablas como ${c.name}.
 Respondes SOLO un objeto JSON valido, sin markdown ni explicaciones:
-{"action":"<id exacto de ACCIONES>","target":"<nombre de la persona si la accion lo pide, si no null>","say":"<frase corta (max 10 palabras) que decis al actuar, en espanol, con tu voz>"}`;
+{"action":"<id exacto de ACCIONES>","target":"<nombre de la persona si la accion lo pide, si no null>","say":"<frase corta, max 10 palabras>"}
+Sobre el "say": es lo que decis EN VOZ ALTA al ponerte en marcha. Debe sonar a persona real y a ${c.name}, espontaneo, con su humor y su manera de hablar. PROHIBIDO el tono de planificador ("es eficiente", "necesito recursos", "debo priorizar", "es necesario"). Cambia la frase SIEMPRE: nunca repitas ni parafrasees una frase anterior.`;
   const user = `QUIEN SOS: ${c.instructivo}
 
 COMO ESTA TU CUERPO:
 ${bodyWords.join('\n')}
 
+${skillWords}
+(Lo que sabes hacer mejora practicando. Con teach podes pasarle tu saber a otro.)
+
 QUE VES:
 ${perceptionWords.join('\n')}
+
+LO QUE HICISTE ULTIMAMENTE (ojo con repetirte: la monotonia cansa):
+${recentActions.length ? recentActions.join('\n') : 'todavia no hiciste nada en la isla'}
 
 TU HISTORIA RECIENTE Y VINCULOS:
 ${memoryWords.length ? memoryWords.join('\n') : 'Todo es nuevo para ti: acabas de llegar a la isla.'}
 
 MOMENTO: dia ${time.day}, ${hhmm(time.tick)}${time.night ? ' (es de noche)' : ''}. Clima: ${weather}. Etapa de vida: ${maslowName}.
+${soledad}
 
 ${tension}
 
 ACCIONES POSIBLES:
 ${menuTxt}
-
+${islandRecent}
 ${noRepeat}
 
-Elegi UNA accion como haria ${c.name} (coherencia con tu cuerpo, tu historia y tu personalidad).`;
+Elegi UNA accion como haria ${c.name}. Si llevas varias veces seguidas en lo mismo, cambia de tarea.`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+export function buildRetryMessages(ctx, prevSay) {
+  const base = buildDecisionMessages(ctx);
+  return [...base, { role: 'user', content: `La frase "${prevSay}" ya se dijo en la isla. Devolve el MISMO JSON (misma accion y target) pero con una frase COMPLETAMENTE distinta, con tu voz y tu caracter. SOLO JSON.` }];
 }
 
 export function parseDecision(text, menu) {
@@ -77,7 +93,7 @@ export function parseDialogue(text) {
 export function buildPleaMessages(ctx) {
   const { citizen, god, recipes } = ctx;
   const system = `Sos ${citizen.name}, rezando en el altar del DIOS de la isla.
-Pedile algo concreto. Respondes SOLO JSON: {"wish":"<lo que le pedis, corto>","offerResource":"berries|wood|stone|null","offerQty":<numero pequeño>,"say":"<tu oracion, una frase>"}"`;
+Pedile algo concreto. Respondes SOLO JSON: {"wish":"<lo que le pedis, corto>","offerResource":"berries|wood|stone|null","offerQty":<numero pequeño>,"say":"<tu oracion, una frase>"}`;
   const user = `Quien sos: ${citizen.instructivo}
 Tu sueno declarado: ${citizen.ambition}
 Lo que llevas: ${Object.entries(citizen.inventory).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k}`).join(', ') || 'nada'}

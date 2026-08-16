@@ -15,10 +15,10 @@ export function updateBody(c, { tick, raining, shelterDone = true }) {
   const night = isNight(tick);
   const sleeping = c.action && c.action.id === 'sleep';
   // sed y hambre: suben siempre; de noche mas lento; lluvia hidrata un poco
-  c.needs.water = clamp(c.needs.water + (night ? 0.25 : 0.48) - (raining && !sleeping ? 0.15 : 0), 0, 100);
-  c.needs.food = clamp(c.needs.food + (night ? 0.15 : 0.26), 0, 100);
+  c.needs.water = clamp(c.needs.water + (night ? 0.26 : 0.55) - (raining && !sleeping ? 0.15 : 0), 0, 100);
+  c.needs.food = clamp(c.needs.food + (night ? 0.14 : 0.24), 0, 100);
   // noches frias a la intemperie (antes del refugio) desgastan
-  if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - 0.05, 0, 100);
+  if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - 0.08, 0, 100);
   // energia
   if (sleeping) {
     c.needs.energy = clamp(c.needs.energy + 0.95 * (c.blessings.includes('bed') ? 1.3 : 1), 0, 100);
@@ -66,7 +66,7 @@ export function bodyWords(c) {
     `Salud: ${wordFor(WORDS.health, c.needs.health)}`,
     `Animo: ${c.mood > 65 ? 'de buen humor' : c.mood > 40 ? 'apagado' : 'por el piso'}`,
     c.sick > 0 ? 'Sientes el estomago revuelto (estas enfermo)' : null,
-    inv.length ? `Llevas: ${inv.join(', ')}` : 'No llevas nada',
+    inv.length ? `Llevas: ${inv.join(', ')}${c.inventory.berries + c.inventory.fish > 4 ? ' (ojo: la comida se pudre rapido; comerla, regalarla o conservarla)' : ''}` : 'No llevas nada',
   ].filter(Boolean);
 }
 
@@ -107,3 +107,19 @@ export function maslowLayer(c, world, others) {
 }
 
 export const MASLOW_NAME = ['colapsado', 'sobreviviendo', 'seguro', 'perteneciendo', 'reconocido', 'realizado'];
+
+// ===== destrezas: aprendizaje manual con curva (retornos decrecientes, modulado por rasgos) =====
+export const SKILL_NAME = { fish: 'pesca', forage: 'recoleccion', gather: 'tala y mineria', build: 'construccion' };
+
+export function mkSkills() { return { fish: 10, forage: 10, gather: 10, build: 10 }; }
+
+export function skillUp(c, key, mult = 1) {
+  if (!(key in c.skills)) return;
+  const inc = (1.2 + (c.traits.trabajador || 0) * 0.8) * (1 - c.skills[key] / 100) * mult;
+  c.skills[key] = clamp(c.skills[key] + inc, 0, 100);
+}
+
+export function skillWords(c) {
+  return 'Destrezas (mejoran con la practica): ' + Object.entries(c.skills)
+    .map(([k, v]) => `${SKILL_NAME[k]} ${Math.round(v)}/100`).join(', ');
+}

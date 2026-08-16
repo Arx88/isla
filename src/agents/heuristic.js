@@ -10,6 +10,7 @@ const SAY = {
   build_altar: ['que el DIOS nos vea', 'piedras para el que escucha', 'aunque no crea, no cuesta', 'el altar crece', 'que listen nuestras voces', 'mas cerca del cielo', 'fe en forma de piedra', 'que no se enoje'],
   pray: ['DIOS de la isla, escuchame', 'te pido de corazon', 'no me dejes solo', 'acepta esto humilde', 'hablame, aunque sea un rumor', 'ten piedad de nosotros', 'escucha mi ofrenda', 'creo, ayuda mi poca fe'],
   talk: ['un rato de charla no viene mal', 'vos que pensas?', 'contame que hiciste hoy', 'hace falta hablar con alguien', 'que dia el de hoy, no?', 'venis del campamento?', 'te quiero comentar algo', 'nos quedamos callados?'],
+  teach: ['esto te lo enseno yo', 'mirame las manos y aprende', 'el que sabe, comparte', 'tomá, años de oficio', 'aprender es sobrevivir', 'te muestro como se hace', 'esto me costo sudor, te lo regalo', 'sabiduria de isla, amigo'],
   gift: ['toma, te hace falta', 'compartir es sobrevivir', 'para vos', 'esto es de todos', 'no te mueras de hambre, bobo', 'yo tengo de sobra', 'hoy me toca dar', 'comelo tranquilo'],
   explore: ['que habra alla?', 'hay que conocer la isla', 'camino nuevo', 'el horizonte llama', 'voy a ver que hay', 'pasos hacia lo desconocido', 'a abrir sendero', 'la isla es mas grande que el miedo'],
   rest: ['cinco minutos', 'las piernas piden tregua', 'un respiro', 'a descansar un toque', 'recargar fuerzas', 'solo un momento', 'que sol el de hoy', 'aire y nada mas'],
@@ -59,6 +60,7 @@ export function createHeuristic() {
         else if (maslow < 2 && !per.shelterDone && c.inventory.wood >= 2 && has('build_shelter')) actionId = 'build_shelter';
         else if (has('gather_wood') && rng.chance(per.shelterDone ? 0.35 : 0.7) && !(per.shelterDone && c.inventory.wood >= 8)) actionId = 'gather_wood';
         else if (traits.devoto > 0.4 && has('pray') && rng.chance(0.5)) actionId = 'pray';
+        else if (has('teach') && rng.chance(0.3)) actionId = 'teach';
         else if (!per.altarDone && c.inventory.stone >= 1 && has('build_altar') && rng.chance(0.6)) actionId = 'build_altar';
         else if (has('gather_stone') && rng.chance(0.45)) actionId = 'gather_stone';
         else if (traits.sociable > 0.3 && has('talk') && rng.chance(0.4)) actionId = 'talk';
@@ -71,8 +73,12 @@ export function createHeuristic() {
       }
       if (!actionId) actionId = 'rest';
       let target = null;
-      if ((actionId === 'talk' || actionId === 'gift') && per.others.length) target = pick(per.others, rng).name;
+      if ((actionId === 'talk' || actionId === 'gift' || actionId === 'teach') && per.others.length) target = pick(per.others, rng).name;
       return { action: actionId, target, say: freshSay(SAY[actionId] || ['...'], rng) };
+    },
+    async retrySay(ctx, prevSay) {
+      const pool = SAY[ctx.chosenAction] || SAY.rest;
+      return freshSay(pool, ctx.rng);
     },
     async dialogueLine(ctx) {
       const { listener, recentLines, rng } = ctx;
@@ -89,6 +95,7 @@ export function createHeuristic() {
       const wishMap = {
         taller: 'herramientas de trabajo', ingenio: 'herramientas de trabajo', dios: 'una senal tuya, una lluvia como respuesta', hablar: 'una senal tuya, una lluvia como respuesta',
         lider: 'un lugar digno para la isla', isla: 'un huerto para alimentar a los mios', pescar: 'una red de pesca', barco: 'un barco para irnos', sueno: 'ayuda para cumplir mi sueno',
+        conservar: 'una forma de conservar la comida', pudre: 'una forma de conservar la comida', comida: 'una forma de conservar la comida',
       };
       const key = Object.keys(wishMap).find((k) => (ambition || '').toLowerCase().includes(k));
       return { wish: key ? wishMap[key] : 'ayuda para sobrevivir', offerResource, offerQty: offerResource ? 2 : 0, say: freshSay(SAY.pray, rng) };

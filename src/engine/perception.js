@@ -42,7 +42,7 @@ export function perceive(c, world, citizens) {
   const fish = nearestOf(world.fishZones.filter(known), c, 30);
   const altar = world.buildings.altar.done ? { ...world.buildings.altar, dist: Math.hypot(world.buildings.altar.x - c.pos.x, world.buildings.altar.y - c.pos.y) } : null;
   const others = citizens.filter((o) => o.alive && o.id !== c.id)
-    .map((o) => ({ id: o.id, name: o.name, dist: Math.round(Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y)), doing: o.action ? o.action.id : 'nada en particular' }))
+    .map((o) => ({ id: o.id, name: o.name, dist: Math.round(Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y)), doing: o.action ? o.action.id : 'nada en particular', ref: o }))
     .filter((o) => o.dist <= RADIUS + 3);
   return { water, cleanWater, bush, tree, stone, fish, altar, others };
 }
@@ -59,6 +59,12 @@ export function perceptionWords(c, per, world) {
   if (per.stone) out.push(`A ${per.stone.dist} pasos ${dirTo(c, per.stone)} hay piedras`);
   if (per.fish) out.push(`A ${per.fish.dist} pasos ${dirTo(c, per.fish)} se puede pescar`);
   if (per.altar) out.push(`El altar del DIOS esta a ${Math.round(per.altar.dist)} pasos`);
+  if (!per.shelterDone) out.push(c.inventory.wood >= 2
+    ? `El refugio NO esta levantado y ya tenes madera: hace falta IR AL CAMPAMENTO y elegir build_shelter para trabajarlo (juntar mas madera no lo avanza)`
+    : 'El refugio NO esta levantado: juntar 2 maderas permite un turno de build_shelter');
+  if (!per.altarDone && world.buildings.altar.progress < world.buildings.altar.needed) out.push(c.inventory.stone >= 1
+    ? `El altar del DIOS no existe todavia y ya tenes piedra: hace falta IR y elegir build_altar para apilarla (juntar mas piedra no lo avanza)`
+    : 'El altar del DIOS no existe todavia: 1 piedra = 1 turno de build_altar');
   if (world.buildings.shelter.progress > 0 && !world.buildings.shelter.done) out.push(`El refugio del campamento va ${Math.round(100 * world.buildings.shelter.progress / world.buildings.shelter.needed)}% construido`);
   if (world.buildings.shelter.done) out.push('El refugio del campamento esta listo');
   for (const o of per.others.slice(0, 3)) {

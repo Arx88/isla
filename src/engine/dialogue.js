@@ -74,6 +74,7 @@ function buildCtx(sim, speaker, listener, convo) {
 function endConversation(sim, convo, note) {
   sim.conversations = sim.conversations.filter((x) => x !== convo);
   convo.a.inConversation = null; convo.b.inConversation = null;
+  convo.a.lastConvoAbs = sim.abs; convo.b.lastConvoAbs = sim.abs;
   convo.a.stats.convos++; convo.b.stats.convos++;
   const topic = convo.lines.length ? convo.lines[convo.lines.length - 1].text.slice(0, 40) : 'cosas de la isla';
   // memorias divergentes: cada uno resume con su propio sesgis

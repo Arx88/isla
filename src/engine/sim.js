@@ -1,7 +1,7 @@
 // sim.js — orquestador del tick: cuerpo -> habitos -> deliberacion (LLM) -> ejecucion determinista
 import { generateWorld } from './worldgen.js';
 import { mulberry32, clamp } from './util.js';
-import { updateBody, bodyWords, urgency, maslowLayer, MASLOW_NAME, isNight, TICKS_PER_DAY } from './body.js';
+import { updateBody, bodyWords, urgency, maslowLayer, MASLOW_NAME, isNight, TICKS_PER_DAY, mkSkills, skillWords } from './body.js';
 import { remember, memoryWords, addFact } from './memory.js';
 import { perceive, perceptionWords, revealFog } from './perception.js';
 import { allowedActions, restrictByCrisis, startAction, stepAction, CATALOG } from './actions.js';
@@ -16,12 +16,13 @@ export function createCitizen(def, world, i) {
     ambitionKey: def.ambitionKey || '', traits: Object.assign({ estoico: 0, ansioso: 0, devoto: 0, sociable: 0, trabajador: 0 }, def.traits),
     pos: { x: world.camp.x + (i - 1) * 2, y: world.camp.y + 1 },
     needs: { water: 55, food: 45, energy: 80, health: 100 },
-    mood: 68, moodBias: 0, sick: 0,
+    mood: 68, moodBias: 0, sick: 0, skills: mkSkills(),
     inventory: { berries: 1, fish: 0, wood: 0, stone: 0 },
     memory: { recent: [], relations: {}, facts: [] },
     habits: {}, knownRecipes: [], blessings: [], knownTiles: new Set(),
     action: null, inConversation: null, lastSays: [],
     stats: { convos: 0, prayers: 0, crafts: 0, godAnswered: 0, ambitionDone: false },
+    actionLog: [], _streak: { id: null, n: 0 }, lastConvoAbs: -288,
     maslow: 0, alive: true, deathCause: null,
     lastDeliberationAbs: -99, _others: [],
   };
@@ -62,15 +63,15 @@ export async function runSim(cfg) {
     events: [], perCache: {},
     metrics: {
       deaths: [], deliberations: { total: 0, byAction: {}, fallbacks: 0 }, habitUses: 0,
-      says: [], conversations: 0, prayers: 0, grants: 0,
+      says: [], recentSaySet: new Set(), conversations: 0, prayers: 0, grants: 0,
       llmCalls: { decide: 0, dialogue: 0, plea: 0, god: 0 }, llmErrors: {},
-      maslowMax: {}, crisisTicks: 0,
+      maslowMax: {}, crisisTicks: 0, nearDeathTicks: 0, teachings: 0,
     },
     emit(kind, text, sal = 1) { this.events.push({ day: this.day, tick: this.tick, kind, text, sal }); },
     async godFlow(c) {
       this.metrics.prayers++; c.stats.prayers++;
       let plea = null;
-      try { plea = await provider.plea({ c, god: this.god, ambition: c.ambition, rng }); this.metrics.llmCalls.plea++; }
+      try { plea = await provider.plea({ c, citizen: c, god: this.god, recipes: RECIPES, ambition: c.ambition, rng }); this.metrics.llmCalls.plea++; }
       catch { plea = await heuristic.plea({ c, rng, ambition: c.ambition }); this.metrics.llmErrors.plea = (this.metrics.llmErrors.plea || 0) + 1; }
       if (plea.say) this.emit('plegaria', `${c.name} reza en el altar: "${plea.say}" (pide: ${plea.wish})`, 3);
       else this.emit('plegaria', `${c.name} reza en silencio (pide: ${plea.wish})`, 3);
@@ -104,6 +105,7 @@ export async function runSim(cfg) {
       if (!c.alive) continue;
       c._simDay = sim.day; c._simTick = sim.tick; c._others = citizens;
       updateBody(c, { tick: sim.tick, raining: sim.raining, shelterDone: sim.world.buildings.shelter.done });
+      if (c.needs.water >= 95 || c.needs.food >= 95 || c.needs.health < 50) sim.metrics.nearDeathTicks++;
       if (c.needs.health <= 0) { die(sim, c); continue; }
       if (c.inConversation) continue;
 
@@ -113,6 +115,8 @@ export async function runSim(cfg) {
         if (evt) {
           if (hKey) recordOutcome(c, hKey, evt.action, evt.kind !== 'fail');
           if (evt.text) sim.emit(evt.kind === 'fail' ? 'fallo' : 'accion', evt.text, evt.sal || 1);
+          c.actionLog.push({ id: evt.action, text: evt.text, day: sim.day, tick: sim.tick });
+          if (c.actionLog.length > 6) c.actionLog.shift();
         }
       } else {
         await decideNext(sim, c);
@@ -150,11 +154,34 @@ async function decideNext(sim, c) {
   c.lastDeliberationAbs = sim.abs;
 
   const menu0 = allowedActions(c, per, sim.world);
-  const menu = restrictByCrisis(menu0, urg);
+  // anti-atesoramiento: si ya acumulaste material de sobre y la obra no avanza, juntar mas sale del menu
+  const B = sim.world.buildings;
+  let menuH = menu0;
+  if (!urg.crisis) {
+    if (!B.altar.done && c.inventory.stone >= 4) menuH = menuH.filter((m) => m.id !== 'gather_stone');
+    if (!B.shelter.done && c.inventory.wood >= 6) menuH = menuH.filter((m) => m.id !== 'gather_wood');
+    // con comida de sobra, juntar mas sale del menu (se pudre de todos modos: la intuicion humana de "ya alcanza")
+    const foodInv = c.inventory.berries + c.inventory.fish;
+    if (foodInv >= 5) menuH = menuH.filter((m) => m.id !== 'forage' && m.id !== 'fish');
+  }
+  // aburrimiento: repetir la misma tarea de trabajo 4+ veces seguidas la saca del menu (la variedad es humana)
+  const SATISFY = ['drink', 'eat', 'sleep', 'rest', 'forage', 'fish'];
+  const menuB = (!urg.crisis && c._streak.n >= 4 && !SATISFY.includes(c._streak.id))
+    ? menuH.filter((m) => m.id !== c._streak.id) : menuH;
+  const menu = restrictByCrisis(menuB, urg);
   if (!menu.length) { const st = startAction(sim, c, 'rest'); return; }
 
+  const aloneH = Math.round((sim.abs - c.lastConvoAbs) / 12);
+  const soledad = (aloneH >= 8 && per.others.length)
+    ? `Hace ~${aloneH}h que no hablas con nadie y hay gente cerca (${per.others.map((o) => o.name).join(', ')}). La soledad te pesa; una charla (talk) te haria bien.` : null;
+  const vocacion = (c.traits.devoto >= 0.5 && !sim.world.buildings.altar.done && c.inventory.stone >= 1)
+    ? 'Sentis un llamado espiritual fuerte: levantar el altar del DIOS (build_altar) es tu mision.' : null;
   const ctx = {
     c, menu, urg, per, rng: sim.rng, traits: c.traits, maslow: c.maslow,
+    recentActions: c.actionLog.slice(-4).map((a) => `${a.id}${a.text ? ` (${a.text})` : ''}`),
+    islandRecent: sim.metrics.says.slice(-10),
+    soledad, vocacion, chosenAction: null,
+    skillWords: skillWords(c),
     bodyWords: bodyWords(c),
     perceptionWords: perceptionWords(c, per, sim.world),
     memoryWords: memoryWords(c),
@@ -170,6 +197,15 @@ async function decideNext(sim, c) {
       if (!ok) decision = null;
     } else if (!menu.some((m) => m.id === decision.action)) decision = null;
     sim.metrics.llmCalls.decide++;
+    // unicidad de frases: si el LLM devolvio una frase ya dicha en la isla, un reintento; si insiste, se omite
+    if (decision && decision.say && sim.metrics.says.includes(decision.say)) {
+      ctx.chosenAction = decision.action;
+      try {
+        const retry = await sim.provider.retrySay(ctx, decision.say);
+        sim.metrics.llmCalls.decide++;
+        decision.say = retry && !sim.metrics.recentSaySet.has(retry) ? retry : null;
+      } catch { decision.say = null; }
+    }
   } catch { usedFallback = true; sim.metrics.llmErrors.decide = (sim.metrics.llmErrors.decide || 0) + 1; }
   if (!decision) {
     decision = await sim.heuristic.decide({ ...ctx, menu });
@@ -184,10 +220,14 @@ async function decideNext(sim, c) {
     decision = fb; usedFallback = true;
   }
   if (c.action) c.action.habitKey = null;
+  c._streak = decision.action === c._streak.id ? { id: c._streak.id, n: c._streak.n + 1 } : { id: decision.action, n: 1 };
   sim.metrics.deliberations.total++;
   sim.metrics.deliberations.byAction[decision.action] = (sim.metrics.deliberations.byAction[decision.action] || 0) + 1;
   if (decision.say) {
-    if (sim.metrics.says.includes(decision.say)) sim.metrics.repeatsExact = (sim.metrics.repeatsExact || 0) + 1;
+    // guard final de unicidad (cubre tambien el path de fallback heuristico)
+    if (sim.metrics.says.includes(decision.say)) decision.say = null;
+  }
+  if (decision.say) {
     sim.metrics.says.push(decision.say);
     c.lastSays.push(decision.say);
     if (c.lastSays.length > 5) c.lastSays.shift();
@@ -207,7 +247,22 @@ async function endOfDay(sim, final = false) {
     sim.pendingRain = false;
     if (sim.raining) sim.emit('clima', `Llueve sobre la isla (dia ${sim.day})`, 2);
     godDailyUpdate(sim);
-    for (const b of sim.world.bushes) b.amount = Math.min(b.max ?? 3, b.amount + 1);
+    if (sim.day % 3 === 0) for (const b of sim.world.bushes) b.amount = Math.min(b.max ?? 3, b.amount + 1);
+    // perecimiento: bayas se pudren 40% por noche (10% con despensa); el pescado crudo no pasa la noche (salvo ahumador)
+    for (const c of sim.citizens) {
+      if (!c.alive) continue;
+      const rotB = c.blessings.includes('pantry') ? Math.ceil(c.inventory.berries * 0.1) : Math.ceil(c.inventory.berries * 0.4);
+      const rotF = c.blessings.includes('smoker') ? 0 : c.inventory.fish;
+      if (rotB > 0 || rotF > 0) {
+        c.inventory.berries -= rotB; c.inventory.fish -= rotF;
+        const parts = [];
+        if (rotB) parts.push(`${rotB} bayas`);
+        if (rotF) parts.push(`${rotF} pescado${rotF > 1 ? 's' : ''} crudo${rotF > 1 ? 's' : ''}`);
+        sim.emit('clima', `la comida de ${c.name} se echo a perder durante la noche (${parts.join(' y ')})`, 2);
+        remember(c, { kind: 'perdida', text: 'se le pudrio comida por no conservarla', salience: 2, emotion: -3 });
+        if (!c.memory.facts.some((f) => f.includes('pudre'))) addFact(c, 'la comida se pudre rapido en la isla: comerla, regalarla o conservarla con ayuda del DIOS');
+      }
+    }
   }
   // maslow + ambiciones
   for (const c of sim.citizens) {

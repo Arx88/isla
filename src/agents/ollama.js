@@ -1,6 +1,6 @@
 // ollama.js — provider LLM local via Ollama (chat no-streaming, retry, sin dependencias)
 import { buildDecisionMessages, parseDecision, buildDialogueMessages, parseDialogue,
-  buildPleaMessages, parsePlea, buildGodMessages, parseGod } from './brain.js';
+  buildPleaMessages, parsePlea, buildGodMessages, parseGod, buildRetryMessages } from './brain.js';
 
 async function chat(model, messages, { temperature = 0.8, maxTokens = 220, timeoutMs = 30000, baseUrl = 'http://localhost:11434' } = {}) {
   const ctrl = new AbortController();
@@ -32,6 +32,12 @@ export function createOllama({ model = 'qwen2.5:7b', baseUrl = 'http://localhost
       const d = parseDecision(txt, ctx.menu);
       if (!d) throw new Error('decision no parseable');
       return d;
+    },
+    async retrySay(ctx, prevSay) {
+      const txt = await ask(buildRetryMessages(ctx, prevSay), { maxTokens: 200 });
+      const d = parseDecision(txt, ctx.menu);
+      if (!d || !d.say) throw new Error('retry no parseable');
+      return d.say;
     },
     async dialogueLine(ctx) {
       const txt = await ask(buildDialogueMessages(ctx), { maxTokens: 90, temperature: 0.9 });

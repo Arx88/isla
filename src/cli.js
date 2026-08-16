@@ -68,7 +68,7 @@ fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'chronicle.md'), chronicle);
 fs.writeFileSync(path.join(outDir, 'metrics.json'), JSON.stringify({
   metrics: sim.metrics, god: { devotion: sim.god.devotion, mood: sim.god.mood, granted: sim.god.granted },
-  citizens: sim.citizens.map((c) => ({ name: c.name, alive: c.alive, cause: c.deathCause, maslow: c.maslow, stats: c.stats, relations: c.memory.relations })),
+  citizens: sim.citizens.map((c) => ({ name: c.name, alive: c.alive, cause: c.deathCause, maslow: c.maslow, skills: c.skills, stats: c.stats, relations: c.memory.relations, recipes: c.knownRecipes.map((r) => r.id) })),
   checklist,
 }, null, 2));
 
@@ -85,7 +85,7 @@ function evaluate(s, cf) {
   const alive = s.citizens.filter((c) => c.alive).length;
   return [
     { name: '1. Semana completa sin crash', pass: true, detail: `${cf.days} dias simulados, ${s.events.length} eventos` },
-    { name: '2. Presion de supervivencia real', pass: m.deaths.length >= 1 || m.crisisTicks >= 150, detail: `muertes=${m.deaths.length} (${m.deaths.map((d) => d.cause).join(',') || '-'}) crisisTicks=${m.crisisTicks} vivos_final=${alive}` },
+    { name: '2. Presion de supervivencia real', pass: m.deaths.length >= 1 || (m.nearDeathTicks || 0) >= 50, detail: `muertes=${m.deaths.length} (${m.deaths.map((d) => d.cause).join(',') || '-'}) peligroMuerteTicks=${m.nearDeathTicks || 0} vivos_final=${alive}` },
     { name: '3. Variedad de decisiones', pass: distinct >= 8 && topShare <= 0.45, detail: `${distinct} acciones distintas, top=${Math.round(topShare * 100)}% (${byAction[0] ? byAction[0][0] : '-'})` },
     { name: '4. Cero frases repetidas exactas', pass: !m.repeatsExact, detail: `repetidas=${m.repeatsExact || 0} de ${m.says.length} frases` },
     { name: '5. Maslow progresa', pass: Object.values(m.maslowMax).some((v) => v >= 2) && m.conversations >= 1, detail: `max por ciudadano=${JSON.stringify(m.maslowMax)}, charlas=${m.conversations}` },

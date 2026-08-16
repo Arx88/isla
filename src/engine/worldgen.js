@@ -102,7 +102,7 @@ export function generateWorld(seed, opts = {}) {
   // vegetacion y piedra
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
     const b = biome[idx(x, y)], r = hash2(x, y, seed + 11);
-    if ((b === BIOME.GRASS || b === BIOME.FOREST) && r > 0.88) addRes(world.bushes, x, y, { amount: 2, max: 2 });
+    if ((b === BIOME.GRASS || b === BIOME.FOREST) && r > 0.93) addRes(world.bushes, x, y, { amount: 1, max: 1 });
     else if (b === BIOME.FOREST && r > 0.30) addRes(world.trees, x, y, { amount: 3 });
     else if (b === BIOME.JUNGLE && r > 0.35) addRes(world.trees, x, y, { amount: 4 });
     else if ((b === BIOME.ROCK || b === BIOME.PINE) && r > 0.90) addRes(world.stones, x, y, { amount: 4 });
@@ -127,7 +127,7 @@ export function generateWorld(seed, opts = {}) {
       }
     }
   };
-  ensure(world.bushes, { amount: 2, max: 2 }, [BIOME.GRASS, BIOME.FOREST], 10);
+  ensure(world.bushes, { amount: 1, max: 1 }, [BIOME.GRASS, BIOME.FOREST], 10);
   ensure(world.stones, { amount: 4 }, [BIOME.GRASS, BIOME.ROCK, BIOME.PINE, BIOME.DRY], 14);
   ensure(world.trees, { amount: 3 }, [BIOME.GRASS, BIOME.FOREST, BIOME.JUNGLE], 12);
   // agua: garantizar rio/estanque a distancia razonable (la escasez viene del esfuerzo, no de la ausencia)

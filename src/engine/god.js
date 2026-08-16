@@ -23,6 +23,18 @@ export const RECIPES = [
     apply(sim, c) { c.inventory.wood -= 4; c.blessings.push('bed'); },
   },
   {
+    id: 'smoker', name: 'Ahumador', desc: 'conservar el pescado para que no se pudra',
+    cost: { wood: 5 }, devotion: 8, tier: 1,
+    payable(c) { return c.inventory.wood >= 5; },
+    apply(sim, c) { c.inventory.wood -= 5; c.blessings.push('smoker'); },
+  },
+  {
+    id: 'pantry', name: 'Despensa', desc: 'guardar bayas sin que se pudran tan rapido',
+    cost: { wood: 6 }, devotion: 10, tier: 1,
+    payable(c) { return c.inventory.wood >= 6; },
+    apply(sim, c) { c.inventory.wood -= 6; c.blessings.push('pantry'); },
+  },
+  {
     id: 'farm_plot', name: 'Huerto sagrado', desc: 'arbustos que dan bayas todos los dias',
     cost: { wood: 8 }, devotion: 15, tier: 2,
     payable(c) { return c.inventory.wood >= 8; },
