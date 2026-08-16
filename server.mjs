@@ -63,7 +63,7 @@ function snapshot(full = false) {
       relations: Object.fromEntries(Object.entries(c.memory.relations).map(([id, r]) => [id, Math.round(r.score)])),
       lastMemories: c.memory.recent.slice(-3).map((m) => m.text),
     })),
-    animals: w.animals.map((a) => ({ t: a.type, x: Math.round(a.x * 10) / 10, y: Math.round(a.y * 10) / 10 })),
+    animals: w.animals.map((a) => ({ t: a.type, x: Math.round(a.x * 10) / 10, y: Math.round(a.y * 10) / 10, tx: Math.round(a.tx * 10) / 10, ty: Math.round(a.ty * 10) / 10 })),
     events: sim.events.slice(-40).map((e, i) => ({ ...e, key: sim.events.length - Math.min(40, sim.events.length) + i })),
   };
   if (full) {

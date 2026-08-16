@@ -206,23 +206,26 @@ export function generateWorld(seed, opts = {}) {
   }
 
   // fauna: manadas y bichos por bioma (deambulan solos, sin LLM)
-  const spawnAnimals = (type, biomeIds, count, homeR = 10) => {
+  const spawnHerd = (type, biomeIds, herds, size) => {
     let placed = 0, tries = 0;
-    while (placed < count && tries++ < count * 60) {
-      const x = 2 + Math.floor(Math.random() * (w - 4)), y = 2 + Math.floor(Math.random() * (h - 4));
-      const b = biome[idx(x, y)];
-      if (!biomeIds.includes(b)) continue;
-      if (Math.hypot(x - camp.x, y - camp.y) < 25) continue; // no en el patio de casa
-      world.animals.push({ type, x, y, hx: x, hy: y, hr: homeR, tx: x, ty: y, ph: Math.random() * 9 });
+    while (placed < herds && tries++ < herds * 80) {
+      const x = 4 + Math.random() * (w - 8), y = 4 + Math.random() * (h - 8);
+      if (!biomeIds.includes(biome[idx(x | 0, y | 0)])) continue;
+      if (Math.hypot(x - camp.x, y - camp.y) < 22) continue;
+      for (let k = 0; k < size + (Math.random() * 3 | 0); k++) {
+        const ax = clamp(x + (Math.random() - 0.5) * 10, 2, w - 3) | 0;
+        const ay = clamp(y + (Math.random() - 0.5) * 8, 2, h - 3) | 0;
+        if (!biomeIds.includes(biome[idx(ax, ay)])) continue;
+        world.animals.push({ type, x: ax, y: ay, hx: ax, hy: ay, hr: 9, tx: ax, ty: ay, ph: Math.random() * 9, id: world.animals.length });
+      }
       placed++;
     }
   };
-  const R = (n) => Math.floor(Math.random() * n);
-  spawnAnimals('deer', [BIOME.GRASS, BIOME.MEADOW, BIOME.FOREST], 10 + R(6));
-  spawnAnimals('rabbit', [BIOME.GRASS, BIOME.MEADOW, BIOME.DRY], 12 + R(8));
-  spawnAnimals('boar', [BIOME.DRY, BIOME.FOREST, BIOME.JUNGLE], 8 + R(5));
-  spawnAnimals('snake', [BIOME.SWAMP, BIOME.JUNGLE], 6 + R(4));
-  spawnAnimals('goat', [BIOME.ROCK, BIOME.PINE, BIOME.SNOW], 5 + R(4));
+  spawnHerd('deer', [BIOME.GRASS, BIOME.MEADOW, BIOME.FOREST], 8, 5);
+  spawnHerd('rabbit', [BIOME.GRASS, BIOME.MEADOW, BIOME.DRY], 9, 5);
+  spawnHerd('boar', [BIOME.DRY, BIOME.FOREST, BIOME.JUNGLE], 6, 4);
+  spawnHerd('snake', [BIOME.SWAMP, BIOME.JUNGLE], 7, 2);
+  spawnHerd('goat', [BIOME.ROCK, BIOME.PINE, BIOME.SNOW], 5, 4);
 
   return world;
 }
