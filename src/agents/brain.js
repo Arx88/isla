@@ -71,7 +71,8 @@ export function parseDecision(text, menu) {
 
 export function buildDialogueMessages(ctx) {
   const system = `Sos ${ctx.speaker.name}, naufrago en una isla, en una charla con ${ctx.listener.name}.
-Hablas como hablaria ${ctx.speaker.name}: una sola frase corta (max 12 palabras), natural, en espanol.
+Hablas como hablaria ${ctx.speaker.name}: una sola frase corta (max 12 palabras), natural.
+RESPONDES SIEMPRE EN ESPANOL, jamas en otro idioma.
 Respondes SOLO JSON: {"say":"..."}`;
   const rel = ctx.listener.rel;
   const relTxt = rel >= 20 ? `Consideras a ${ctx.listener.name} un amigo.` : rel <= -10 ? `Desconfias de ${ctx.listener.name}.` : `A ${ctx.listener.name} apenas lo conoces.`;

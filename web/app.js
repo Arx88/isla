@@ -15,6 +15,14 @@ let clouds = [], birds = [], flashUntil = 0;
 
 const CHUNK = 32, TS = 16, MAX_CHUNKS = 72;
 const hash2 = (x, y, s = 0) => { const h = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453; return h - Math.floor(h); };
+// value noise (para el shimmer del agua, tecnica del proyecto de referencia)
+function vn(x, y, s) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi, s), b = hash2(xi + 1, yi, s), c = hash2(xi, yi + 1, s), d = hash2(xi + 1, yi + 1, s);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+const vnoise2 = (x, y, s) => vn(x, y, s) * 0.65 + vn(x * 2, y * 2, s + 7) * 0.35;
 const rgb = (c, j = 0) => `rgb(${c[0]+j|0},${c[1]+j|0},${c[2]+j|0})`;
 const BIOME = { DEEP: 0, OCEAN: 1, SHAL: 2, SAND: 3, GRASS: 4, DRY: 5, FOREST: 6, JUNGLE: 7, SWAMP: 8, SWAMPW: 9, PINE: 10, ROCK: 11, SNOW: 12, RBANCO: 13, RIVER: 14, MEADOW: 15 };
 const COL = {
@@ -158,11 +166,13 @@ function getChunk(cxc, cyc) {
 }
 
 // ============ preparacion al recibir el mapa ============
+let riverFlowMap = null;
 function prepareWorld() {
   chunks = new Map();
   coastEdges = []; waterTiles = []; riverTiles = [];
+  riverFlowMap = new Map();
   for (const ws of map.water || []) {
-    if (ws.k === 'rio') riverTiles.push({ x: ws.x, y: ws.y, fx: ws.fx || 0, fy: ws.fy || 1, h: hash2(ws.x, ws.y, 21) });
+    if (ws.k === 'rio') { riverTiles.push({ x: ws.x, y: ws.y, fx: ws.fx || 0, fy: ws.fy || 1, h: hash2(ws.x, ws.y, 21) }); riverFlowMap.set(ws.y * map.w + ws.x, ws); }
   }
   const w = map.w, h = map.h;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -221,7 +231,8 @@ function frame(now) {
   const t = Math.min(1, (now - snapAt) / Math.max(200, snap.tickMs));
   const inView = (x, y, m = 2) => x * z + cx > -m * z && x * z + cx < W + m * z && y * z + cy > -m * z && y * z + cy < H + m * z;
 
-  // agua viva: oleaje en dos capas, crestas que viajan, reflejos del sol, orilla que respira
+  // agua viva por-pixel (causticas, corriente, profundidad) + oleaje en bordes
+  drawWaterFX(now);
   let waterDraws = 0;
   for (const e of coastEdges) {
     if (!inView(e.x, e.y) || waterDraws > 700) continue;
@@ -237,52 +248,49 @@ function frame(now) {
       if (ed === 'E') { ctx.fillRect(px + z - 2.5, py + 2 - off, 2.5, z - 5); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + z - 5 - off2, py + 2 + off, 2, z - 5); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
     }
   }
+  // destellos de sol escasos: el cuerpo del agua ya lo da el overlay por-pixel
   for (const wt of waterTiles) {
-    if (waterDraws > 900) break;
-    if (!inView(wt.x, wt.y)) continue;
-    const px = wt.x * z + cx, py = wt.y * z + cy;
-    waterDraws++;
-    // ola viajera
-    if (wt.h > 0.45) {
-      const sx = px + ((now / 650 + wt.h * 40) % (z * 1.4)) - z * 0.2;
-      const surf = wt.b === BIOME.DEEP ? 'rgba(70,110,150,.4)' : 'rgba(150,200,225,.55)';
-      ctx.fillStyle = surf; ctx.fillRect(sx, py + z * .45 + Math.sin(now / 900 + wt.x) * 1, z * .34, 1.6);
-      ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.fillRect(sx + z * .08, py + z * .42, z * .18, 1);
-    }
-    // destello de sol
-    if (wt.h > 0.955 && snap.weather !== 'storm') {
-      const tw = 0.5 + Math.sin(now / 350 + wt.h * 60) * 0.5;
-      if (tw > 0.55) {
-        ctx.fillStyle = `rgba(255,255,240,${tw * 0.8})`;
-        const gx = px + z * .5, gy = py + z * .5;
-        ctx.fillRect(gx - z * .14, gy - 0.75, z * .28, 1.5); ctx.fillRect(gx - 0.75, gy - z * .14, 1.5, z * .28);
-      }
-    }
+    if (waterDraws > 900 || wt.h < 0.96 || !inView(wt.x, wt.y)) continue;
+    const tw = 0.5 + Math.sin(now / 350 + wt.h * 60) * 0.5;
+    if (tw < 0.6 || snap.weather === 'storm') continue;
+    const gx = wt.x * z + cx + z * .5, gy = wt.y * z + cy + z * .5;
+    ctx.fillStyle = `rgba(255,255,240,${tw * 0.55})`;
+    ctx.fillRect(gx - z * .14, gy - 0.75, z * .28, 1.5); ctx.fillRect(gx - 0.75, gy - z * .14, 1.5, z * .28);
   }
 
-  // cataratas: chorros con brillos que caen, resplandor y mini arcoiris
+  // cataratas: caida rapida por-pixel (ruido que corre), espuma, niebla orbitante y arcoiris
+  const wtime = now / 1000;
   for (const wf of map.waterfalls || []) {
     if (!inView(wf.x, wf.y, 4)) continue;
     const px = wf.x * z + cx, py = wf.y * z + cy;
-    const wdt = z * 1.3, hgt = z * 2.8;
-    ctx.fillStyle = 'rgba(205,238,250,.8)';
+    const wdt = z * 1.3, hgt = z * 2.8, g = Math.max(1, Math.round(z / 16));
+    ctx.fillStyle = 'rgba(205,238,250,.75)';
     ctx.fillRect(px - z * .1, py - hgt * .5, wdt, hgt);
-    ctx.fillStyle = 'rgba(255,255,255,.75)';
-    for (let k = 0; k < 5; k++) {
-      const dropY = py - hgt * .5 + ((now / (240 + k * 90) + k * z) % hgt);
-      ctx.fillRect(px - z * .05 + k * (wdt / 5) + Math.sin(now / 170 + k * 2) * z * .06, dropY, wdt / 7, z * .4);
+    // shimmer por columna: el ruido corre hacia abajo rapido (como el diorama)
+    const cols = 9;
+    for (let c2 = 0; c2 < cols; c2++) {
+      const colX = px - z * .1 + (c2 + 0.5) * (wdt / cols);
+      for (let seg = 0; seg < 6; seg++) {
+        const f2 = vn(wf.x * 9 + c2, wf.y * 3 + seg - wtime * 7, 44);
+        if (f2 > 0.52) {
+          const segY = py - hgt * .5 + (((seg * hgt / 6) + wtime * 3 * z) % hgt);
+          ctx.fillStyle = f2 > 0.7 ? 'rgba(223,240,247,.85)' : 'rgba(255,255,255,.5)';
+          ctx.fillRect(colX - wdt / cols / 3, segY, wdt / cols / 1.5, z * .18);
+        }
+      }
     }
-    // espuma y salpicaduras en la base
+    // niebla que orbita la base (tecnica del diorama)
+    ctx.fillStyle = 'rgba(223,240,247,0.14)';
+    for (let i = 0; i < 12; i++) {
+      const a = (i * 0.7 + wtime * 1.4) % 6.283;
+      ctx.fillRect(px + wdt / 2 + Math.cos(a) * (z * .5 + (i % 5) * g) | 0, py + hgt * .38 + Math.sin(a * 1.3) * z * .12 | 0, 2 * g, g);
+    }
+    // espuma en la base
     ctx.fillStyle = 'rgba(240,250,255,.5)';
-    ctx.beginPath(); ctx.ellipse(px + wdt / 2 - z * .1, py + hgt * .42, wdt * .8, z * .3, 0, 0, 7); ctx.fill();
-    for (let k = 0; k < 4; k++) {
-      const bph = (now / 400 + k * 0.25) % 1;
-      ctx.fillStyle = `rgba(255,255,255,${0.6 * (1 - bph)})`;
-      ctx.fillRect(px - z * .2 + k * z * .4 + Math.sin(now / 300 + k) * z * .1, py + hgt * .42 - bph * z * .5, 2.5, 2.5);
-    }
+    ctx.beginPath(); ctx.ellipse(px + wdt / 2 - z * .1, py + hgt * .42, wdt * .8, z * .28, 0, 0, 7); ctx.fill();
     // mini arcoiris
     if (snap.weather !== 'storm') {
-      const rA = 0.18 + Math.sin(now / 900) * 0.05;
+      const rA = 0.16 + Math.sin(now / 900) * 0.04;
       for (let k = 0; k < 3; k++) {
         ctx.strokeStyle = ['rgba(255,120,120,', 'rgba(140,230,140,', 'rgba(140,170,255,'][k] + (rA * (1 - k * 0.2)) + ')';
         ctx.lineWidth = 1.5;
@@ -299,7 +307,7 @@ function frame(now) {
     for (let k = 0; k < 2; k++) {
       const prog = ((now / 420 + rt.h * 30 + k * z * 0.45) % (z * 0.9)) - z * 0.2;
       const gx = px + z * .2 + rt.fx * prog, gy = py + z * .4 + rt.fy * prog;
-      ctx.fillStyle = k ? 'rgba(210,240,250,.55)' : 'rgba(255,255,255,.4)';
+      ctx.fillStyle = k ? 'rgba(215,242,250,.3)' : 'rgba(255,255,255,.2)';
       if (horiz) ctx.fillRect(gx, gy, z * .32, Math.max(1, z * .06));
       else ctx.fillRect(gx, gy, Math.max(1, z * .06), z * .32);
     }
@@ -380,7 +388,7 @@ function drawVignette() {
     vignette = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) * .42,
       canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * .72);
     vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    vignette.addColorStop(1, 'rgba(8,12,28,.35)');
+    vignette.addColorStop(1, 'rgba(5,10,8,.48)');
   }
   ctx.fillStyle = vignette; ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
@@ -535,8 +543,10 @@ function drawAltar(A, z, cx, cy, now) {
   ctx.fillStyle = '#9c948a'; ctx.fillRect(x + z * .2, y - z * .05, z * .6, z * .4);
   if (done) {
     const pulse = 0.5 + Math.sin(now / 400) * 0.3;
-    ctx.fillStyle = `rgba(80,220,255,${0.18 + pulse * 0.2})`;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(80,220,255,${0.14 + pulse * 0.16})`;
     ctx.beginPath(); ctx.arc(x + z * .5, y - z * .45, z * (0.9 + pulse * .15), 0, 7); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
     // chispas que suben del altar
     for (let k = 0; k < 3; k++) {
       const s = (now / 700 + k * 0.33) % 1;
@@ -548,27 +558,46 @@ function drawAltar(A, z, cx, cy, now) {
   }
 }
 function drawFire(z, cx, cy, now) {
+  const time = now / 1000;
   const fx = map.camp.x * z + cx, fy = map.camp.y * z + cy + z * .7;
-  // halo calido grande (acogedor)
-  const glow = 0.5 + Math.sin(now / 90) * 0.12 + Math.sin(now / 37) * 0.05;
-  const grad = ctx.createRadialGradient(fx, fy - z * .2, 0, fx, fy - z * .2, z * 2.6);
-  grad.addColorStop(0, `rgba(255,150,50,${0.22 * glow})`);
-  grad.addColorStop(0.5, `rgba(255,120,30,${0.1 * glow})`);
-  grad.addColorStop(1, 'rgba(255,120,30,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(fx - z * 2.6, fy - z * 2.6, z * 5.2, z * 5.2);
-  ctx.fillStyle = '#5a4634'; ctx.fillRect(fx - z * .35, fy, z * .7, z * .15);
-  ctx.fillStyle = '#4a3828'; ctx.fillRect(fx - z * .25, fy - z * .08, z * .5, z * .1);
-  const fl = Math.sin(now / 85) * z * .08, fl2 = Math.sin(now / 60 + 2) * z * .05;
-  // chispas que suben
-  for (let k = 0; k < 3; k++) {
-    const sp = (now / 600 + k * 0.37) % 1;
-    ctx.fillStyle = `rgba(255,200,90,${0.8 * (1 - sp)})`;
-    ctx.fillRect(fx + Math.sin(now / 200 + k * 2) * z * .15, fy - z * .5 - sp * z * 1.2, 2, 2);
+  const g = Math.max(1, Math.round(z / 16));
+  const FIREP = ['#fff3bd', '#ffd257', '#ff9b2e', '#e5501c'];
+  // leños y piedras
+  PP(fx - 4 * g, fy - g, 8 * g, 2 * g, '#5a3d22');
+  PP(fx - 3 * g, fy - 2 * g, 6 * g, g, '#6d4a29');
+  for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; PP(fx + Math.cos(a) * 6 * g, fy + Math.sin(a) * 3 * g, 2 * g, 2 * g, '#8a8274'); }
+  // 5 lenguas de fuego con flicker compuesto (como el diorama)
+  const flick = 0.6 + 0.4 * Math.sin(time * 9) * Math.sin(time * 5.3);
+  for (let l = 0; l < 5; l++) {
+    const hgt = (7 - l) * (0.7 + flick * 0.5) * g;
+    for (let y = 0; y < hgt; y += g) {
+      const w = Math.max(g, Math.round((hgt - y) * 0.7 / g) * g);
+      const sx = fx + Math.round(Math.sin(time * 6 + y * 0.9 / g + l) * 0.9) * g - w / 2;
+      PP(sx, fy - 3 * g - y - l * g * 0.3, w, g, FIREP[Math.min(3, (Math.round(y / g) >> 1) + (l > 2 ? 1 : 0))]);
+    }
   }
-  ctx.fillStyle = '#ff8c1e'; ctx.fillRect(fx - z * .15, fy - z * .4 - fl, z * .3, z * .4 + fl);
-  ctx.fillStyle = '#ffc85a'; ctx.fillRect(fx - z * .08, fy - z * .3 - fl * .6 + fl2 * .3, z * .16, z * .26);
-  ctx.fillStyle = '#fff3c0'; ctx.fillRect(fx - z * .03, fy - z * .16, z * .06, z * .1);
+  PP(fx - 2 * g, fy - 3 * g, 4 * g, g, FIREP[0]);
+  // brasas que suben
+  for (let i = 0; i < 7; i++) {
+    const ph = (time * 0.7 + i * 0.37) % 1;
+    PP(fx + Math.sin(time * 2 + i * 2) * 3 * g, fy - 8 * g - ph * 22 * g, g, g, i % 2 ? FIREP[1] : FIREP[2]);
+  }
+  // humo suave
+  ctx.fillStyle = 'rgba(190,190,200,0.10)';
+  for (let i = 0; i < 12; i++) {
+    const ph = (time * 0.35 + i * 0.09) % 1;
+    ctx.fillRect(fx + Math.sin(time + i) * (2 + ph * 7) * g, fy - 12 * g - ph * 38 * g, 2 * g, 2 * g);
+  }
+  // luz ADITIVA (el truco de iluminacion del diorama)
+  const r = (26 + flick * 5) * g * 2;
+  ctx.globalCompositeOperation = 'lighter';
+  const grd = ctx.createRadialGradient(fx, fy - 2 * g, 1, fx, fy - 2 * g, r);
+  grd.addColorStop(0, 'rgba(255,175,70,0.34)');
+  grd.addColorStop(0.6, 'rgba(255,140,40,0.12)');
+  grd.addColorStop(1, 'rgba(255,140,40,0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(fx - r, fy - 2 * g - r, r * 2, r * 2);
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 // ============ fauna (orientada al destino, con patitas animadas) ============
@@ -831,16 +860,18 @@ function tickAmbient(now, dt, z, cx, cy) {
   const night = snap.tick < 60 || snap.tick > 270;
   // luciernagas: de noche, cerca del campamento
   if (night && snap.weather !== 'storm' && snap.weather !== 'fog') {
+    ctx.globalCompositeOperation = 'lighter'; // las luciernagas emiten luz
     for (const f of fireflies) {
       f.x += Math.sin(now / 900 + f.wx) * 0.012; f.y += Math.cos(now / 780 + f.wy) * 0.01;
       if (!inViewFn(f.x, f.y)) continue;
       const glow = 0.5 + Math.sin(now / 260 + f.ph) * 0.5;
       const px = f.x * z + cx, py = f.y * z + cy - z * .3;
-      ctx.fillStyle = `rgba(200,255,120,${glow * 0.16})`;
-      ctx.beginPath(); ctx.arc(px, py, z * .3 * glow + 2, 0, 7); ctx.fill();
+      ctx.fillStyle = `rgba(198,255,120,${glow * 0.2})`;
+      ctx.beginPath(); ctx.arc(px, py, z * .35 * glow + 2, 0, 7); ctx.fill();
       ctx.fillStyle = `rgba(235,255,160,${glow})`;
       ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
     }
+    ctx.globalCompositeOperation = 'source-over';
   }
   // mariposas: de dia despejado/nublado, sobre los campos de flores
   if (!night && (snap.weather === 'clear' || snap.weather === 'cloudy')) {
@@ -910,7 +941,62 @@ function tickAmbient(now, dt, z, cx, cy) {
 }
 let inViewFn = () => false;
 
-// ============ clima visual ============
+// ============ agua viva por-pixel (tecnica del diorama de referencia) ============
+// overlay a resolucion nativa baja: cada pixel = fpx px de pantalla; shimmer con ruido que se desplaza
+const fxCv = document.createElement('canvas');
+const fxg = fxCv.getContext('2d');
+function drawWaterFX(now) {
+  const z = zG;
+  const fpx = Math.max(2, Math.round(z / 8)); // px de pantalla por pixel del overlay
+  let fw = Math.ceil(canvas.width / fpx), fh = Math.ceil(canvas.height / fpx);
+  const cap = 420 * 260;
+  const scale = Math.sqrt(Math.max(1, (fw * fh) / cap));
+  const efpx = Math.max(2, Math.round(fpx * scale));
+  fw = Math.min(520, Math.ceil(canvas.width / efpx)); fh = Math.min(320, Math.ceil(canvas.height / efpx));
+  const fps = canvas.width / fw;
+  if (fxCv.width !== fw || fxCv.height !== fh) { fxCv.width = fw; fxCv.height = fh; }
+  const img = fxg.createImageData(fw, fh);
+  const d = img.data;
+  const time = now / 1000;
+  const HW = canvas.width / 2 / z, HH = canvas.height / 2 / z;
+  const step = fps / z; // tiles por pixel del overlay
+  for (let j = 0; j < fh; j++) {
+    const wy = cam.y - HH + (j + 0.5) * step;
+    const ty = wy | 0;
+    if (ty < 0 || ty >= map.h) continue;
+    for (let i = 0; i < fw; i++) {
+      const wx = cam.x - HW + (i + 0.5) * step;
+      const tx = wx | 0;
+      if (tx < 0 || tx >= map.w) continue;
+      const bi = ty * map.w + tx;
+      const b = map.biome[bi];
+      if (b > 2 && b !== 9 && b !== 14) continue;
+      const nx = wx * 16, ny = wy * 16;
+      let f, alpha;
+      if (b === 14) { // rio: el ruido se arrastra con la corriente
+        const fl = riverFlowMap.get(bi) || { fx: 0, fy: 1 };
+        f = vnoise2(nx * 0.13 + fl.fx * time * 2.0, ny * 0.13 + fl.fy * time * 2.0, 33);
+        alpha = 115;
+      } else if (b === 9) { // pantano: casi quieto, verdoso
+        f = vnoise2(nx * 0.16, ny * 0.16 - time * 0.35, 55);
+        alpha = 80;
+      } else { // mar/orilla: causticas lentas que suben
+        f = vnoise2(nx * 0.10, ny * 0.10 - time * 1.1, 33);
+        alpha = 105;
+      }
+      let r = 0, g = 0, bl = 0;
+      if (f > 0.665) { r = 223; g = 240; bl = 247; alpha += 25; }    // espuma brillante
+      else if (f > 0.575) { r = 100; g = 152; bl = 198; alpha -= 15; } // bruma clara
+      else if (f < 0.335) { r = 26; g = 55; bl = 90; alpha -= 30; }    // profundo
+      else continue;
+      const o = (j * fw + i) * 4;
+      d[o] = r; d[o + 1] = g; d[o + 2] = bl; d[o + 3] = Math.max(40, Math.min(230, alpha));
+    }
+  }
+  fxg.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(fxCv, 0, 0, canvas.width, canvas.height);
+}
 let boltSeed = 0;
 function drawWeather(now, dt) {
   const wt = snap.weather;
