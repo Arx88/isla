@@ -46,6 +46,7 @@ export async function tickConversations(sim) {
       const text = (line && line.say || '').trim();
       if (!text) { endConversation(sim, convo, null); return; }
       convo.lines.push({ by: speaker.name, text });
+      speaker.visualSay = { text, until: sim.abs + 4 };
       sim.emit('dialogo', `${speaker.name}: "${text}"`, 2);
       const s = sentiment(text);
       if (s > 0) { adjustRel(listener, speaker.id, Math.min(6, 2 * s), `${speaker.name} le hablo bien`); adjustRel(speaker, listener.id, 1, 'charlaron'); }

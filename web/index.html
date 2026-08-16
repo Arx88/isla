@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISLA — en vivo</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ===== pantalla de inicio ===== -->
+<div id="intro" class="intro">
+  <div class="intro-card">
+    <h1 class="logo">ISLA</h1>
+    <p class="tagline">Nadie los controla. Cada uno fue <em>escrito</em> por alguien.<br>Sobreviven, negocian con el DIOS… o mueren.</p>
+
+    <div class="roster" id="roster"></div>
+
+    <div class="intro-controls">
+      <label class="seedbox">Semilla
+        <input id="seed" type="number" placeholder="al azar">
+      </label>
+      <button id="btnStart" class="btn-primary">COMENZAR TEMPORADA</button>
+    </div>
+    <p class="hint">Cerebro: <span id="brainLabel">…</span> · podés editar los instructivos: son la única jugada</p>
+  </div>
+</div>
+
+<!-- ===== vista en vivo ===== -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="brand">ISLA</div>
+    <div class="clock">
+      <span id="dayLabel">Día 1</span>
+      <span class="time" id="timeLabel">06:00</span>
+      <span id="weatherLabel" class="weather">despejado</span>
+    </div>
+    <div class="speed">
+      <button id="btnPause" title="Pausar">⏸</button>
+      <button class="spd" data-ms="2500">1×</button>
+      <button class="spd" data-ms="800">4×</button>
+      <button class="spd" data-ms="200">16×</button>
+    </div>
+    <div class="god-chip" id="godChip" title="El DIOS">
+      <span class="god-icon">Ω</span>
+      <span class="god-dev" id="godDev">0</span>
+      <span class="god-mood" id="godMood">😐</span>
+    </div>
+  </header>
+
+  <main class="stage">
+    <canvas id="world"></canvas>
+
+    <aside class="roster-side" id="rosterSide"></aside>
+
+    <div class="citizen-card hidden" id="citizenCard">
+      <div class="cc-head">
+        <span class="cc-portrait" id="ccPortrait"></span>
+        <div>
+          <div class="cc-name" id="ccName"></div>
+          <div class="cc-stage" id="ccStage"></div>
+        </div>
+        <button class="cc-close" id="ccClose">✕</button>
+      </div>
+      <div class="cc-needs" id="ccNeeds"></div>
+      <div class="cc-skills" id="ccSkills"></div>
+      <div class="cc-rels" id="ccRels"></div>
+      <div class="cc-mem" id="ccMem"></div>
+    </div>
+
+    <div class="minimap-wrap">
+      <canvas id="minimap"></canvas>
+    </div>
+
+    <div class="ticker" id="ticker"></div>
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

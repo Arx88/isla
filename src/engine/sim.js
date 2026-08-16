@@ -23,6 +23,8 @@ export function createCitizen(def, world, i) {
     action: null, inConversation: null, lastSays: [],
     stats: { convos: 0, prayers: 0, crafts: 0, godAnswered: 0, ambitionDone: false },
     actionLog: [], _streak: { id: null, n: 0 }, lastConvoAbs: -288,
+    color: def.color || ['#d95f5f', '#6f9fd9', '#e8c95a', '#8fd98f', '#c98fd9', '#e8965a', '#7fd9c9', '#d97fb0', '#a9b45a', '#9a8fd9'][i % 10],
+    visualSay: null,
     maslow: 0, alive: true, deathCause: null,
     lastDeliberationAbs: -99, _others: [],
   };
@@ -51,7 +53,7 @@ function arrivalMemory(c, world) {
   const s = mark(world.stones, 18); if (s) c.knownTiles.add(s.e.y * world.w + s.e.x);
 }
 
-export async function runSim(cfg) {
+export function createSim(cfg) {
   const rng = mulberry32(cfg.seed || 42);
   const world = generateWorld(cfg.seed || 42, { w: 96, h: 60 });
   const citizens = cfg.citizens.map((d, i) => createCitizen(d, world, i));
@@ -59,7 +61,7 @@ export async function runSim(cfg) {
   const provider = cfg.provider || heuristic;
   const sim = {
     cfg, rng, world, citizens, god: createGod(), provider, heuristic,
-    day: 1, tick: 72, abs: 72, conversations: [], pendingRain: false, raining: false,
+    day: 1, tick: 71, abs: 71, conversations: [], pendingRain: false, raining: false,
     events: [], perCache: {},
     metrics: {
       deaths: [], deliberations: { total: 0, byAction: {}, fallbacks: 0 }, habitUses: 0,
@@ -94,35 +96,44 @@ export async function runSim(cfg) {
   };
 
   sim.emit('llegada', `Dia 1: ${citizens.map((c) => c.name).join(', ')} despiertan varados en una isla desconocida. ${citizens.length} sobrevivientes.`, 5);
+  return sim;
+}
 
-  const totalAbs = cfg.days * TICKS_PER_DAY;
-  for (let abs = 72; abs < totalAbs; abs++) {
-    sim.abs = abs; sim.day = Math.floor(abs / TICKS_PER_DAY) + 1; sim.tick = abs % TICKS_PER_DAY;
-    if (sim.tick === 287) await endOfDay(sim);
-    await tickConversations(sim);
+// avanza exactamente un tick (5 min de juego); el servidor en vivo llama esto en tiempo real
+export async function simTick(sim) {
+  sim.abs += 1;
+  sim.day = Math.floor(sim.abs / TICKS_PER_DAY) + 1;
+  sim.tick = sim.abs % TICKS_PER_DAY;
+  if (sim.tick === 287) await endOfDay(sim);
+  await tickConversations(sim);
 
-    for (const c of citizens) {
-      if (!c.alive) continue;
-      c._simDay = sim.day; c._simTick = sim.tick; c._others = citizens;
-      updateBody(c, { tick: sim.tick, raining: sim.raining, shelterDone: sim.world.buildings.shelter.done });
-      if (c.needs.water >= 95 || c.needs.food >= 95 || c.needs.health < 50) sim.metrics.nearDeathTicks++;
-      if (c.needs.health <= 0) { die(sim, c); continue; }
-      if (c.inConversation) continue;
+  for (const c of sim.citizens) {
+    if (!c.alive) continue;
+    c._simDay = sim.day; c._simTick = sim.tick; c._others = sim.citizens;
+    updateBody(c, { tick: sim.tick, raining: sim.raining, shelterDone: sim.world.buildings.shelter.done });
+    if (c.needs.water >= 95 || c.needs.food >= 95 || c.needs.health < 50) sim.metrics.nearDeathTicks++;
+    if (c.needs.health <= 0) { die(sim, c); continue; }
+    if (c.inConversation) continue;
 
-      if (c.action) {
-        const prevId = c.action.id, hKey = c.action.habitKey;
-        const evt = stepAction(sim, c);
-        if (evt) {
-          if (hKey) recordOutcome(c, hKey, evt.action, evt.kind !== 'fail');
-          if (evt.text) sim.emit(evt.kind === 'fail' ? 'fallo' : 'accion', evt.text, evt.sal || 1);
-          c.actionLog.push({ id: evt.action, text: evt.text, day: sim.day, tick: sim.tick });
-          if (c.actionLog.length > 6) c.actionLog.shift();
-        }
-      } else {
-        await decideNext(sim, c);
+    if (c.action) {
+      const prevId = c.action.id, hKey = c.action.habitKey;
+      const evt = stepAction(sim, c);
+      if (evt) {
+        if (hKey) recordOutcome(c, hKey, evt.action, evt.kind !== 'fail');
+        if (evt.text) sim.emit(evt.kind === 'fail' ? 'fallo' : 'accion', evt.text, evt.sal || 1);
+        c.actionLog.push({ id: evt.action, text: evt.text, day: sim.day, tick: sim.tick });
+        if (c.actionLog.length > 6) c.actionLog.shift();
       }
+    } else {
+      await decideNext(sim, c);
     }
   }
+}
+
+export async function runSim(cfg) {
+  const sim = createSim(cfg);
+  const totalAbs = cfg.days * TICKS_PER_DAY;
+  while (sim.abs < totalAbs) await simTick(sim);
   return sim;
 }
 
@@ -228,6 +239,7 @@ async function decideNext(sim, c) {
     if (sim.metrics.says.includes(decision.say)) decision.say = null;
   }
   if (decision.say) {
+    c.visualSay = { text: decision.say, until: sim.abs + 5 };
     sim.metrics.says.push(decision.say);
     c.lastSays.push(decision.say);
     if (c.lastSays.length > 5) c.lastSays.shift();
