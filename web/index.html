@@ -154,24 +154,53 @@
     <aside class="roster-side" id="rosterSide"></aside>
 
     <div class="citizen-card hidden" id="citizenCard">
-      <div class="cc-head">
-        <canvas class="cc-portrait" id="ccPortrait" width="44" height="50"></canvas>
-        <div>
+      <div class="cc-head" id="ccHead">
+        <canvas class="cc-portrait" id="ccPortrait" width="66" height="78"></canvas>
+        <div class="cc-head-txt">
           <div class="cc-name" id="ccName"></div>
           <div class="cc-stage" id="ccStage"></div>
+          <div class="cc-badges" id="ccBadges"></div>
         </div>
         <button class="cc-close" id="ccClose">✕</button>
       </div>
-      <div class="cc-subtitle" id="ccSubtitle"></div>
       <div class="cc-think hidden" id="ccThink"></div>
-      <div class="cc-sec"><div class="cc-sec-t">Cuerpo</div><div class="cc-needs" id="ccNeeds"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Ánimo y emociones</div><div class="cc-skills" id="ccSkills"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Mochila</div><div class="cc-inv" id="ccInv"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Vínculos</div><div class="cc-rels" id="ccRels"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Últimas conversaciones</div><div class="cc-convos" id="ccConvos"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Su mapa de la isla</div><div class="cc-places" id="ccPlaces"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Pensamientos privados</div><div class="cc-thoughts" id="ccThoughts"></div></div>
-      <div class="cc-sec"><div class="cc-sec-t">Recuerdos</div><div class="cc-mem" id="ccMem"></div></div>
+      <nav class="cc-tabs" id="ccTabs">
+        <button class="cc-tab active" data-tab="estado">🫀 Estado</button>
+        <button class="cc-tab" data-tab="historia">📜 Historia</button>
+        <button class="cc-tab" data-tab="gente">🤝 Gente</button>
+        <button class="cc-tab" data-tab="isla">🗺️ Isla</button>
+        <button class="cc-tab" data-tab="mente">💭 Mente</button>
+      </nav>
+      <div class="cc-body">
+        <div class="cc-pane" data-pane="estado">
+          <div class="cc-sec-t">Cuerpo</div>
+          <div class="cc-needs" id="ccNeeds"></div>
+          <div class="cc-sec-t">Oficios y atributos</div>
+          <div class="cc-skills" id="ccSkills"></div>
+          <div class="cc-sec-t">Emociones</div>
+          <div class="cc-emotions" id="ccEmotions"></div>
+        </div>
+        <div class="cc-pane hidden" data-pane="historia">
+          <div class="cc-sec-t">Últimas conversaciones</div>
+          <div class="cc-convos" id="ccConvos"></div>
+          <div class="cc-sec-t">Recuerdos</div>
+          <div class="cc-mem" id="ccMem"></div>
+        </div>
+        <div class="cc-pane hidden" data-pane="gente">
+          <div class="cc-sec-t">Vínculos</div>
+          <div class="cc-rels" id="ccRels"></div>
+        </div>
+        <div class="cc-pane hidden" data-pane="isla">
+          <div class="cc-sec-t">Su mapa mental</div>
+          <div class="cc-places" id="ccPlaces"></div>
+          <div class="cc-sec-t">Sueño y meta</div>
+          <div class="cc-goal" id="ccGoal"></div>
+        </div>
+        <div class="cc-pane hidden" data-pane="mente">
+          <div class="cc-sec-t">Pensamientos privados</div>
+          <div class="cc-thoughts" id="ccThoughts"></div>
+        </div>
+      </div>
     </div>
 
     <div class="minimap-wrap">
