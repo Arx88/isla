@@ -15,6 +15,21 @@ import { shelterEnv, shelterFx, anyShelterDone, inProgressShelter } from './shel
 import { fireEnv, fireFx, fireHeat, anyFireDone, inProgressFire, unlockedFireDesigns, firesList as firesListWorld } from './fire.js';
 import { altarOf, unlockedAltarDesigns, altarCostTxt } from './altar.js';
 
+// saludo del PRIMER ENCUENTRO: varia segun la personalidad (no es una frase fija)
+function firstGreeting(speaker, other, rng) {
+  const pick = (arr) => arr[Math.floor(rng.next() * arr.length)];
+  const t = speaker.traits || {};
+  const scared = (t.ansioso || 0) > 0.5;
+  const warm = (t.sociable || 0) > 0.5;
+  const stoic = (t.estoico || 0) > 0.5;
+  const devout = (t.devoto || 0) > 0.5;
+  if (scared) return pick(['¿q-quien anda ahi?', '¡no te acerques!', '¿me vas a hacer daño?', 'por favor... no me lastimes']);
+  if (devout) return pick(['¡es una señal! ¡alguien mas!', 'gracias, DIOS, no estoy solo', '¿te envia el DIOS?', '¡un milagro, otra alma!']);
+  if (warm) return pick([`¡${other.name}! ¡que alegria verte!`, '¡por fin alguien! ¡hola!', '¡no lo puedo creer, gente!', '¡amigo! ¿estas bien?']);
+  if (stoic) return pick(['...¿vos tambien sobreviviste?', 'así que no era el unico.', 'hola. ¿necesitas algo?', 'bien. alguien mas.']);
+  return pick(['¿vos sos real?', '¡hay alguien mas en la isla!', '¿de donde saliste?', '¡espera, no te vayas!']);
+}
+
 export function createCitizen(def, world, i, total) {
   const c = {
     id: def.id || `c${i}`, name: def.name, instructivo: def.instructivo, ambition: def.ambition,
@@ -222,8 +237,8 @@ export async function simTick(sim) {
       addEmotion(o, o.traits.ansioso > 0.5 ? 'miedo' : 'alegria', o.traits.ansioso > 0.5 ? 20 : 25, `ver a ${c.name}`);
       remember(c, { kind: 'encuentro', text: `encontro a ${o.name} en la isla`, salience: 5, emotion: 5 });
       remember(o, { kind: 'encuentro', text: `encontro a ${c.name} en la isla`, salience: 5, emotion: 5 });
-      c.visualSay = { text: `¿${o.name}? ¡hay alguien mas!`, until: sim.abs + 5 };
-      o.visualSay = { text: '¿vos sos real?', until: sim.abs + 5 };
+      c.visualSay = { text: firstGreeting(c, o, sim.rng), until: sim.abs + 5 };
+      o.visualSay = { text: firstGreeting(o, c, sim.rng), until: sim.abs + 5 };
       sim.emit('vinculo', `PRIMER ENCUENTRO: ${c.name} y ${o.name} se cruzan por primera vez. Ninguno sabia del otro.`, 5);
     }
     // estar cerca de una zona que recuerda peligrosa: el cuerpo se tensa
@@ -450,8 +465,14 @@ async function decideNext(sim, c) {
   if (!menu.length) { const st = startAction(sim, c, 'rest'); return; }
 
   const aloneH = Math.round((sim.abs - c.lastConvoAbs) / 12);
+  const solitary = per.others.length === 0;
   const soledad = (aloneH >= 8 && per.others.length)
-    ? `Hace ~${aloneH}h que no hablas con nadie y hay gente cerca (${per.others.map((o) => o.name).join(', ')}). La soledad te pesa; una charla (talk) te haria bien.` : null;
+    ? `Hace ~${aloneH}h que no hablas con nadie y hay gente cerca (${per.others.map((o) => o.name).join(', ')}). La soledad te pesa; una charla (talk) te haria bien.`
+    : (aloneH >= 16 && solitary)
+      ? `Hace ~${aloneH}h que no hablas con nadie y no ves a nadie. La soledad pesa: tu cabeza no para, tu boca casi.` : null;
+  // miedo a dormir a la intemperie: un humano sin refugio ni fuego siente la noche como amenaza
+  const outdoorFear = (isNight(sim.tick) && per.shelterEnv && !per.shelterEnv.inside && !(per.fireEnv && per.fireEnv.near))
+    ? 'Es de noche y estas a la intemperie, sin refugio ni fuego cerca: la oscuridad te pone en guardia.' : null;
   const altarW = sim.world.buildings.altar;
   // FIX vitalidad: solo nombrar la accion si de verdad esta en el menu (campamento fundado y conocido).
   // Antes el prompt empujaba design_altar/build_altar aunque no fueran ejecutables -> el LLM obedecia,
@@ -487,7 +508,9 @@ async function decideNext(sim, c) {
       .filter((s) => s.id === c.id || c.met.has(s.id))
       .slice(-8).map((s) => `${s.name}: "${s.text}"`),
     soledad, vocacion, curiosityLine, chosenAction: null, mapLine, dangerLine,
-    emotionLine: emoLine + loveLine, temperatureLine: c.temp < 36.2 ? 'estas TIRITANDO de frio' : c.temp > 37.8 ? 'el calor te agota' : null,
+    emotionLine: emoLine + loveLine,
+    temperatureLine: c.temp < 36.2 ? 'estas TIRITANDO de frio: un fuego o un refugio te devolverian el calor' : c.temp > 37.8 ? 'el calor te agota: busca sombra o agua' : null,
+    outdoorFear, solitary,
     goalLine: c.currentGoal ? `TU PROPOSITO ACTUAL: ${c.currentGoal}` : null, leaderLine,
     skillWords: skillWords(c),
     bodyWords: bodyWords(c),

@@ -52,7 +52,7 @@ export function updateBody(c, { tick, raining, shelterEnv, fireEnv, weather = 'c
   let dmg = 0;
   if (c.needs.water >= 100) dmg += 0.55;
   if (c.needs.food >= 100) dmg += 0.30;
-  if (c.sick > 0) { dmg += 0.25; c.sick -= 1 / TICKS_PER_DAY; }
+  if (c.sick > 0) { dmg += 0.25; c.sick -= 1 / TICKS_PER_DAY; c.needs.water = clamp(c.needs.water + 0.12, 0, 100); } // la fiebre deshidrata
   if (!sleeping && c.needs.energy <= 0) dmg += 0.35;
   if (dmg > 0) c.needs.health = clamp(c.needs.health - dmg, 0, 100);
   else if (c.needs.water < 60 && c.needs.food < 60 && c.needs.energy > 30) {
@@ -94,7 +94,8 @@ export function bodyWords(c) {
     `Energia: ${wordFor(WORDS.energy, 100 - c.needs.energy)}`,
     `Salud: ${wordFor(WORDS.health, c.needs.health)}`,
     `Animo: ${c.mood > 65 ? 'de buen humor' : c.mood > 40 ? 'apagado' : 'por el piso'}`,
-    c.sick > 0 ? 'Sientes el estomago revuelto (estas enfermo)' : null,
+    c.sick > 0 ? 'Sientes el estomago revuelto y la frente caliente (estas enfermo: la fiebre te deshidrata)' : null,
+    (c.wet || 0) > 65 ? 'Tu ropa esta EMPAPADA y pesa: si dormis asi te vas a enfermar' : (c.wet || 0) > 30 ? 'Tu ropa esta humeda' : null,
     inv.length ? `Llevas: ${inv.join(', ')}${c.inventory.berries + c.inventory.fish > 4 ? ' (ojo: la comida se pudre rapido; comerla, regalarla o conservarla)' : ''}` : 'No llevas nada',
   ].filter(Boolean);
 }

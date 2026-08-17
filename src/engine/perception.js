@@ -72,8 +72,26 @@ export function perceive(c, world, citizens, weather = 'clear', tick = 100) {
   const fish = nearestOf(world.fishZones.filter(known), c, 30);
   const altar = world.buildings.altar.done ? { ...world.buildings.altar, dist: Math.hypot(world.buildings.altar.x - c.pos.x, world.buildings.altar.y - c.pos.y) } : null;
   const others = citizens.filter((o) => o.alive && o.id !== c.id)
-    .map((o) => ({ id: o.id, name: o.name, dist: Math.round(Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y)), doing: o.action ? o.action.id : 'nada en particular', ref: o }))
+    .map((o) => ({
+      id: o.id, name: o.name,
+      dist: Math.round(Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y)),
+      doing: o.action ? o.action.id : 'nada en particular',
+      met: !!(c.met && c.met.has(o.id)),
+      rel: ((c.memory.relations || {})[o.id] || {}).score || 0,
+      sick: (o.sick || 0) > 0,
+      cold: (o.temp || 36.8) < 36.2,
+      wet: (o.wet || 0) > 65,
+      sleeping: !!(o.action && o.action.id === 'sleep'),
+      ref: o,
+    }))
     .filter((o) => o.dist <= RADIUS + 3);
+  const aliveOthers = citizens.filter((o) => o.alive && o.id !== c.id).length;
+  // senales visibles en el mundo: huellas, humo, ballena, fruta (solo las que aun no descubrio)
+  const wonders = (world.wonders || [])
+    .filter((w0) => !w0.seen)
+    .map((w0) => ({ kind: w0.kind, dist: Math.round(Math.hypot(w0.x - c.pos.x, w0.y - c.pos.y)), dir: dirTo(c, w0) }))
+    .filter((w0) => w0.dist <= RADIUS + (w0.kind === 'smoke' ? 6 : 2))
+    .sort((p, q) => p.dist - q.dist);
   const danger = (world.animals || []).find((a) =>
     (a.type === 'boar' || a.type === 'snake') && Math.hypot(a.x - c.pos.x, a.y - c.pos.y) <= RADIUS);
   const animals = (world.animals || [])
@@ -83,7 +101,7 @@ export function perceive(c, world, citizens, weather = 'clear', tick = 100) {
   // planos nuevos que este naufrago podria dibujar (skill de construccion / gracia del DIOS)
   const designable = unlockedShelterDesigns(c).filter((d) => !sheltersList(world).some((s) => s.design === d.id));
   const boatDesignable = unlockedBoatDesigns(c).filter((d) => !boatsList(world).some((s) => s.design === d.id));
-  return { water, cleanWater, bush, tree, stone, fish, altar, others, danger, animals, designable, boatDesignable };
+  return { water, cleanWater, bush, tree, stone, fish, altar, others, aliveOthers, wonders, danger, animals, designable, boatDesignable };
 }
 
 export function perceptionWords(c, per, world) {
@@ -131,8 +149,30 @@ export function perceptionWords(c, per, world) {
   const readyB = doneBoats(world);
   if (readyB.length) out.push(`Hay ${readyB.length > 1 ? readyB.length + ' barcos' : 'un barco'} BOTADO en la playa: quien quiera irse de la isla puede ZARPAR (sail_away)`);
   for (const o of per.others.slice(0, 3)) {
-    out.push(`${o.name} esta a ${o.dist} pasos (${doingWords(o.doing)})`);
+    const estado = [];
+    if (!o.met) estado.push('NO lo conoces todavia');
+    else if (o.rel >= 20) estado.push('es de tu confianza');
+    else if (o.rel <= -10) estado.push('desconfias de el');
+    if (o.sick) estado.push('se lo ve enfermo');
+    if (o.cold) estado.push('esta tiritando de frio');
+    if (o.wet) estado.push('empapado');
+    if (o.sleeping) estado.push('dormido');
+    const est = estado.length ? ` [${estado.join(', ')}]` : '';
+    out.push(`${o.name} esta a ${o.dist} pasos (${doingWords(o.doing)})${est}`);
   }
+  // senales del mundo: lo que un humano veria y lo empujaria a investigar (o a temer)
+  const WOW_WORD = {
+    huellas: 'HUELLAS frescas de persona en el suelo: alguien mas anda por aqui',
+    smoke: 'una columna de HUMO a lo lejos: hay fuego, y donde hay fuego hay gente',
+    whale: 'el bulto enorme de una BALLENA varada en la playa',
+    fruit: 'un aroma dulce a FRUTA madura que viene de cerca',
+  };
+  for (const w0 of (per.wonders || []).slice(0, 2)) {
+    if (WOW_WORD[w0.kind]) out.push(`Ves ${WOW_WORD[w0.kind]} (${w0.dist} pasos ${w0.dir})`);
+  }
+  // soledad real: lo que un humano sentiria segun cuanta gente existe
+  if (!(per.aliveOthers > 0)) out.push('No queda nadie mas en la isla: sos el unico sobreviviente');
+  else if (per.others.length === 0) out.push('No ves a nadie por aqui: estas solo en esta parte de la isla');
   if (per.danger) out.push(per.danger.type === 'boar' ? 'PELIGRO: un jabali cerca' : 'PELIGRO: una serpiente cerca');
   for (const a of (per.animals || []).slice(0, 2)) {
     out.push(`ves ${ANIMAL_NAME[a.t] || a.t} a ${a.d} pasos${a.t === 'boar' ? ' (CUIDADO: cornamenta)' : ''}`);

@@ -14,6 +14,9 @@ export function buildDecisionMessages(ctx) {
   const islandRecent = (ctx.islandRecent && ctx.islandRecent.length)
     ? `\nULTIMAS FRASES OYERON EN LA ISLA (no las digas ni parecidas): ${ctx.islandRecent.slice(-8).map((s) => `"${s}"`).join('; ')}` : '';
   const soledad = ctx.soledad || ctx.vocacion || ctx.curiosityLine ? `\n${[ctx.soledad, ctx.vocacion, ctx.curiosityLine].filter(Boolean).join(' ')}` : '';
+  const outdoorFear = ctx.outdoorFear ? `\n${ctx.outdoorFear}` : '';
+  // solo = piensa mas de lo que habla: el monologo interior se alarga
+  const thinkMax = ctx.solitary ? 22 : 12;
   // FIX vitalidad: la explicacion de "target" solo nombra las acciones de diseño que ESTAN en el menu.
   // Antes el system prompt mencionaba design_altar/design_shelter/etc. aunque no estuvieran disponibles,
   // y el modelo las elegia igual -> fallo de parseo -> fallback heuristico.
@@ -21,7 +24,7 @@ export function buildDecisionMessages(ctx) {
   const targetHint = designInMenu.length ? `; para ${designInMenu.join(' o ')}, el nombre del plano elegido` : '';
   const system = `Sos la mente de ${c.name}, un naufrago en una isla. NO sos narrador ni estratega: decidis y hablas como ${c.name}.
 Respondes SOLO un objeto JSON valido, sin markdown ni explicaciones:
-{"action":"<id EXACTO de la lista ACCIONES POSIBLES, ni uno mas ni uno menos>","target":"<nombre de la persona si la accion lo pide${targetHint}; si no null>","say":"<frase corta, max 10 palabras>","think":"<tu pensamiento PRIVADO, max 12 palabras, lo que de verdad piensas o sentis y no decis>","goal":"<opcional: un proposito propio para estos dias, max 10 palabras>"}
+{"action":"<id EXACTO de la lista ACCIONES POSIBLES, ni uno mas ni uno menos>","target":"<nombre de la persona si la accion lo pide${targetHint}; si no null>","say":"<frase corta, max 10 palabras>","think":"<tu pensamiento PRIVADO, max ${thinkMax} palabras, lo que de verdad piensas o sentis y no decis>","goal":"<opcional: un proposito propio para estos dias, max 10 palabras>"}
 Si usas target/goal y no aplican, ponelos como null. Si dudas entre dos acciones, elegi una sola y no expliques. PROHIBIDO inventar acciones que no esten en la lista.
 Sobre el "say": es lo que decis EN VOZ ALTA al ponerte en marcha. Debe sonar a persona real y a ${c.name}, espontaneo, con su humor y su manera de hablar. PROHIBIDO el tono de planificador ("es eficiente", "necesito recursos", "debo priorizar"). Cambia la frase SIEMPRE: nunca repitas ni parafrasees una frase anterior.
 Sobre el "think": es tu monologo interior — puede ser distinto de lo que decis (miedo, deseo, calculo, nostalgia). Honesto y humano.`;
@@ -44,7 +47,7 @@ ${memoryWords.length ? memoryWords.join('\n') : 'Todo es nuevo para ti: acabas d
 ${ctx.mapLine ? '\n' + ctx.mapLine : ''}${ctx.dangerLine ? '\n' + ctx.dangerLine : ''}
 
 MOMENTO: dia ${time.day}, ${hhmm(time.tick)}${time.night ? ' (es de noche: casi no ves mas alla de unos pasos)' : ''}. Clima: ${weather}. Etapa de vida: ${maslowName}.
-${soledad}
+${soledad}${outdoorFear}
 ${ctx.emotionLine || ''}
 ${ctx.temperatureLine ? ctx.temperatureLine + '\n' : ''}${ctx.goalLine ? ctx.goalLine + '\n' : ''}${ctx.leaderLine ? ctx.leaderLine : ''}
 
