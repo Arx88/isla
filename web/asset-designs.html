@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISLA — taller de refugios</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { overflow: auto; background: #060b14; }
+  .shop { max-width: 1500px; margin: 0 auto; padding: 22px 18px 60px; }
+  .shop-head { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+  .shop-head h1 { font-family: var(--mono); font-size: 19px; letter-spacing: 5px; color: var(--gold);
+    text-shadow: 0 0 18px rgba(240,194,100,.3); }
+  .shop-head p { font-size: 12px; color: var(--ink2); flex: 1; min-width: 260px; }
+  .shop-head code { color: var(--good); font-family: var(--mono); }
+  .bg-pick { display: flex; gap: 6px; }
+  .bg-pick button { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; cursor: pointer;
+    color: var(--ink2); background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
+  .bg-pick button:hover { color: var(--ink); border-color: var(--gold-deep); }
+  .bg-pick button.on { background: var(--gold); color: #332604; border-color: var(--gold); font-weight: 700; }
+  .cvwrap { border: 1px solid var(--line); border-radius: 12px; overflow: auto; background: #08131f;
+    box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+  #designs { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<div class="shop">
+  <header class="shop-head">
+    <h1>⛺ TALLER DE REFUGIOS</h1>
+    <p>6 diseños que escalan en niveles según el avance de obra (estacas → estructura → muros → terminado, día y noche).
+      Elegí uno y lo integro en <code>drawShelter</code> de <code>app.js</code>.</p>
+    <div class="bg-pick" id="bgPick">
+      <button class="on" data-g="pradera">pradera</button>
+      <button data-g="playa">playa</button>
+      <button data-g="bosque">bosque</button>
+      <button data-g="roca">roca</button>
+    </div>
+  </header>
+  <div class="cvwrap"><canvas id="designs"></canvas></div>
+</div>
+<script src="/asset-designs.js"></script>
+</body>
+</html>

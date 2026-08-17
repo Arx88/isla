@@ -22,17 +22,32 @@ GI.paint = function (g, x, y, z, m, now = 0, o = {}) {
   const beard = !female && (ap.beard !== undefined ? !!ap.beard : true);
   const ph = (o.phase || 0);
   const walk = !!o.walk;
+  const dangle = !!o.dangle;      // colgado de la mano divina: brazos arriba, piernas pataleando
+  const lift = o.lift || 0;       // 0 en el suelo, 1 muy elevado: la sombra se apaga y baja
   const wp = walk ? Math.sin(now / 120 + ph) : 0;
   const bob = walk ? Math.abs(Math.sin(now / 120 + ph)) * z * 0.04 : Math.sin(now / 800 + ph) * z * 0.02;
   const yb = y - bob;
+  // squash & stretch: colgado o cayendo, el cuerpo se estira en vertical
+  if (o.squash) { const gy = yb - z * .2; g.translate(x, gy); g.scale(1 - o.squash * .45, 1 + o.squash * .7); g.translate(-x, -gy); }
 
-  g.fillStyle = 'rgba(0,0,0,.30)';
-  g.beginPath(); g.ellipse(x, y + z * .92, z * .32 * fs, z * .12, 0, 0, 7); g.fill();
+  if (lift < 0.98) {
+    const sk = 1 - lift * .45;
+    g.fillStyle = `rgba(0,0,0,${(0.3 * (1 - lift)).toFixed(3)})`;
+    g.beginPath(); g.ellipse(x, y + z * .92 + lift * z * .5, z * .32 * fs * sk, z * .12 * sk, 0, 0, 7); g.fill();
+  }
 
-  const lw = (wp > 0 ? wp * z * .06 : 0), rw = (wp < 0 ? -wp * z * .06 : 0);
   g.fillStyle = skin;
-  g.fillRect(x - z * .24 * fs, yb + z * .42 + lw, z * .17 * fs, z * .48 - lw);
-  g.fillRect(x + z * .07 * fs, yb + z * .42 + rw, z * .17 * fs, z * .48 - rw);
+  if (dangle) {
+    const kick = Math.sin(now / 110 + ph);
+    g.save(); g.translate(x - z * .14 * fs, yb + z * .4); g.rotate(-0.3 + kick * 0.28);
+    g.fillRect(-z * .085 * fs, 0, z * .17 * fs, z * .5); g.restore();
+    g.save(); g.translate(x + z * .14 * fs, yb + z * .4); g.rotate(0.3 - kick * 0.28);
+    g.fillRect(-z * .085 * fs, 0, z * .17 * fs, z * .5); g.restore();
+  } else {
+    const lw = (wp > 0 ? wp * z * .06 : 0), rw = (wp < 0 ? -wp * z * .06 : 0);
+    g.fillRect(x - z * .24 * fs, yb + z * .42 + lw, z * .17 * fs, z * .48 - lw);
+    g.fillRect(x + z * .07 * fs, yb + z * .42 + rw, z * .17 * fs, z * .48 - rw);
+  }
   g.fillStyle = outfit;
   g.fillRect(x - z * .3 * fs, yb + z * .34, z * .6 * fs, z * .26);
   g.fillStyle = 'rgba(0,0,0,.25)';
@@ -55,10 +70,17 @@ GI.paint = function (g, x, y, z, m, now = 0, o = {}) {
   g.moveTo(x - z * .26, yb + z * .02); g.lineTo(x + z * .26, yb - z * .12);
   g.lineTo(x + z * .26, yb + z * .0); g.lineTo(x - z * .26, yb + z * .14); g.closePath(); g.fill();
 
-  const sway = walk ? -wp * z * .1 : Math.sin(now / 700 + ph) * z * .025;
   g.fillStyle = skin;
-  g.fillRect(x - z * .38 * fs, yb - z * .12 + sway, z * .13 * fs, z * .42);
-  g.fillRect(x + z * .25 * fs, yb - z * .12 - sway, z * .13 * fs, z * .42);
+  if (dangle) {
+    // brazos estirados hacia arriba (lo sostienen de las axilas)
+    const wig = Math.sin(now / 150 + ph) * z * .02;
+    g.fillRect(x - z * .34 * fs, yb - z * .34 - z * .1 + wig, z * .13 * fs, z * .42);
+    g.fillRect(x + z * .21 * fs, yb - z * .34 - z * .1 - wig, z * .13 * fs, z * .42);
+  } else {
+    const sway = walk ? -wp * z * .1 : Math.sin(now / 700 + ph) * z * .025;
+    g.fillRect(x - z * .38 * fs, yb - z * .12 + sway, z * .13 * fs, z * .42);
+    g.fillRect(x + z * .25 * fs, yb - z * .12 - sway, z * .13 * fs, z * .42);
+  }
 
   g.fillStyle = skin; g.fillRect(x - z * .17 * fs, yb - z * .58 * fs, z * .34 * fs, z * .42 * fs);
   g.fillStyle = hairCol;

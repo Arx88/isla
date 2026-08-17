@@ -332,9 +332,17 @@ function frame(now) {
   for (const a of snap.animals || []) if (inView(a.x, a.y) && fogAt(a.x, a.y)) sortables.push({ y: a.y + 0.7, draw: () => drawAnimal(a, z, cx, cy, now) });
   // maravillas del mundo (humo, fruta, ballena) — solo donde ya exploraron
   for (const wd of map.wonders || []) if (!wd.seen && inView(wd.x, wd.y, 3) && fogAt(wd.x, wd.y)) drawWonder(wd, z, cx, cy, now);
-  const Bsh = map.buildings.shelter, Bal = map.buildings.altar;
-  if (Bsh.progress > 0) sortables.push({ y: Bsh.y + 1.1, draw: () => drawShelter(Bsh, z, cx, cy, now) });
-  if (Bal.progress > 0) sortables.push({ y: Bal.y + 1.1, draw: () => drawAltar(Bal, z, cx, cy, now) });
+  const Bsh = map.buildings.shelter, Bfr = map.buildings.fire, Bal = map.buildings.altar;
+  if (Array.isArray(Bsh)) {
+    for (const S of Bsh) if (S.progress > 0) sortables.push({ y: S.y + 1.1, draw: () => drawShelter(S, z, cx, cy, now) });
+  }
+  if (Array.isArray(Bfr)) {
+    for (const F of Bfr) if (F.progress > 0) sortables.push({ y: F.y + 1.0, draw: () => drawFirePit(F, z, cx, cy, now) });
+  }
+  if (Bal.progress > 0 || Bal.design) sortables.push({ y: Bal.y + 1.1, draw: () => drawAltar(Bal, z, cx, cy, now) });
+  // barcos en la playa (window.SHIP): la obra de madera o la nave botada (los que zarparon ya no estan)
+  const Bbo = (map.buildings.boats || []).filter((b) => !b.sailed);
+  for (const B of Bbo) if (B.progress > 0) sortables.push({ y: B.y + 1.15, draw: () => drawBoat(B, z, cx, cy, now) });
   for (const g of map.graves) if (inView(g.x, g.y) && fogAt(g.x, g.y)) sortables.push({ y: g.y + 0.9, draw: () => drawGrave(g.x * z + cx, g.y * z + cy, z) });
   for (const c of snap.citizens) {
     if (!inView(c.x, c.y) || !c.alive) continue;
@@ -526,34 +534,42 @@ function drawGrave(x, y, z) {
   ctx.fillStyle = '#4a5058'; ctx.fillRect(x + z * .42, y + z * .2, z * .16, z * .4); ctx.fillRect(x + z * .32, y + z * .3, z * .36, z * .14);
 }
 function drawShelter(S, z, cx, cy, now) {
-  const x = S.x * z + cx, y = S.y * z + cy, done = S.done, p = S.progress / S.needed;
-  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * 1.1, z * .9, z * .25, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = done ? '#a97c50' : '#6e523a'; ctx.fillRect(x - z * .25, y - z * .1, z * 1.5, z * 1.1);
-  ctx.fillStyle = done ? '#c99c68' : '#7d5f44'; ctx.fillRect(x - z * .12, y + z * .05, z * 1.25, z * .7);
-  ctx.fillStyle = '#3c2e20'; ctx.fillRect(x + z * .3, y + z * .25, z * .4, z * .65);
-  const rh = done ? z * 0.95 : z * (0.3 + p * 0.6);
-  // techo a dos aguas con textura de paja (lineas)
-  ctx.fillStyle = done ? '#4a8f3c' : '#3c6e34';
-  ctx.beginPath(); ctx.moveTo(x - z * .5, y - z * .1); ctx.lineTo(x + z * .5, y - rh - z * .1); ctx.lineTo(x + z * 1.5, y - z * .1); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = done ? '#5aa848' : '#4a8a40';
-  ctx.beginPath(); ctx.moveTo(x - z * .2, y - rh * .55 - z * .1); ctx.lineTo(x + z * .5, y - rh - z * .1); ctx.lineTo(x + z * 1.2, y - rh * .55 - z * .1); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.lineWidth = 1;
-  for (let k = 1; k < 4; k++) { ctx.beginPath(); ctx.moveTo(x - z * .5 + (k * z * .5) / 4, y - z * .1 - (rh * k) / 8); ctx.lineTo(x + z * .2 + (k * z * .4) / 4, y - rh * .82); ctx.stroke(); }
-  if (!done) { ctx.fillStyle = '#ffd54f'; ctx.font = `${Math.max(8, z * .3) | 0}px monospace`; ctx.fillText(`${Math.round(p * 100)}%`, x, y - z * .2); }
+  const x = S.x * z + cx, y = (S.y + 1) * z + cy, p = Math.min(1, S.progress / S.needed);
+  const f = (window.SHELTER && window.SHELTER.paint[S.design]) || null;
+  if (!f) return; // diseño desconocido (snapshot viejo)
+  const night = snap.tick < 66 || snap.tick > 264;
+  const st = S.done ? 3 : p < 0.06 ? 0 : p < 0.5 ? 1 : 2;
+  const o = SHELTER.painter(ctx, z * 1.1);
+  f(o, x + z / 2, y, z * 1.1, night ? 3 : st, night && S.done ? 'night' : 'normal');
+  if (night && S.done) f(o, x + z / 2, y, z * 1.1, 3, 'glow');
+  if (!S.done) {
+    ctx.fillStyle = 'rgba(10,14,10,.6)'; ctx.fillRect(x - z * .1, y - z * 1.15, z * 1.2, Math.max(3, z * .16));
+    ctx.fillStyle = '#ffd54f'; ctx.fillRect(x - z * .1, y - z * 1.15, z * 1.2 * p, Math.max(3, z * .16));
+    ctx.font = `${Math.max(8, z * .26) | 0}px monospace`; ctx.fillStyle = '#ffd54f';
+    ctx.fillText(`${Math.round(p * 100)}%`, x + z * .12, y - z * 1.2);
+  }
 }
 function drawAltar(A, z, cx, cy, now) {
-  const x = A.x * z + cx, y = A.y * z + cy, done = A.done;
-  ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * .95, z * .62, z * .18, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = '#6d675c'; ctx.fillRect(x + z * .05, y - z * .15, z * .9, z);
-  ctx.fillStyle = '#8a8274'; ctx.fillRect(x + z * .12, y + z * .6, z * .76, z * .3);
-  ctx.fillStyle = '#9c948a'; ctx.fillRect(x + z * .2, y - z * .05, z * .6, z * .4);
-  if (done) {
+  const x = A.x * z + cx, y = (A.y + 1) * z + cy;
+  const p = A.needed ? Math.min(1, A.progress / A.needed) : 0;
+  const design = A.design || 'mesa';
+  const f = (window.ALTAR && window.ALTAR.paint[design]) || null;
+  const night = snap.tick < 66 || snap.tick > 264;
+  if (f) {
+    const st = A.done ? 3 : p < 0.06 ? 0 : p < 0.5 ? 1 : 2;
+    const o = window.ALTAR.painter(ctx, z * 1.15);
+    f(o, x + z / 2, y, z * 1.15, night ? 3 : st, night && A.done ? 'night' : 'normal');
+    if (night && A.done) f(o, x + z / 2, y, z * 1.15, 3, 'glow');
+  } else {
+    // diseño desconocido (snapshot viejo): piedra genérica con halo
+    ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * .95, z * .62, z * .18, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#6d675c'; ctx.fillRect(x + z * .05, y - z * .15, z * .9, z);
+    ctx.fillStyle = '#8a8274'; ctx.fillRect(x + z * .12, y + z * .6, z * .76, z * .3);
+    ctx.fillStyle = '#9c948a'; ctx.fillRect(x + z * .2, y - z * .05, z * .6, z * .4);
+  }
+  if (A.done) {
     const pulse = 0.5 + Math.sin(now / 400) * 0.3;
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = `rgba(80,220,255,${0.14 + pulse * 0.16})`;
-    ctx.beginPath(); ctx.arc(x + z * .5, y - z * .45, z * (0.9 + pulse * .15), 0, 7); ctx.fill();
-    ctx.globalCompositeOperation = 'source-over';
-    // chispas que suben del altar
+    // chispas divinas que suben
     for (let k = 0; k < 3; k++) {
       const s = (now / 700 + k * 0.33) % 1;
       ctx.fillStyle = `rgba(150,240,255,${0.7 * (1 - s)})`;
@@ -606,6 +622,42 @@ function drawFire(z, cx, cy, now) {
   ctx.fillStyle = grd;
   ctx.fillRect(fx - r, fy - 2 * g - r, r * 2, r * 2);
   ctx.globalCompositeOperation = 'source-over';
+}
+
+// barcos diseñados (window.SHIP): cada nave en la playa se pinta con su propio plano
+function drawBoat(B, z, cx, cy, now) {
+  const x = B.x * z + cx, y = (B.y + 1) * z + cy, p = Math.min(1, B.progress / B.needed);
+  const f = (window.SHIP && window.SHIP.paint && window.SHIP.paint[B.design]) || null;
+  if (!f) return; // diseño desconocido (snapshot viejo)
+  const st = B.done ? 3 : p < 0.06 ? 0 : p < 0.5 ? 1 : 2;
+  const o = window.SHIP.painter ? window.SHIP.painter(ctx, z * 1.25) : SHELTER.painter(ctx, z * 1.25);
+  o.t = now / 1000;
+  f(o, x + z / 2, y, z * 1.25, st, B.done ? 'day' : 'dock-stage');
+  if (!B.done) {
+    ctx.fillStyle = 'rgba(10,14,10,.6)'; ctx.fillRect(x - z * .1, y - z * 1.5, z * 1.2, Math.max(3, z * .16));
+    ctx.fillStyle = '#ffd54f'; ctx.fillRect(x - z * .1, y - z * 1.5, z * 1.2 * p, Math.max(3, z * .16));
+    ctx.font = `${Math.max(8, z * .26) | 0}px monospace`; ctx.fillStyle = '#ffd54f';
+    ctx.fillText(`${Math.round(p * 100)}%`, x + z * .12, y - z * 1.55);
+  }
+}
+
+// fogatas diseñadas (window.FIRE): cada fuego del campamento arde con su propio plano
+function drawFirePit(F, z, cx, cy, now) {
+  const x = F.x * z + cx, y = (F.y + 1) * z + cy, p = Math.min(1, F.progress / F.needed);
+  const f = (window.FIRE && window.FIRE.paint && window.FIRE.paint[F.design]) || null;
+  if (!f) return; // diseño desconocido (snapshot viejo)
+  const night = snap.tick < 66 || snap.tick > 264;
+  const st = F.done ? 3 : p < 0.06 ? 0 : p < 0.5 ? 1 : 2;
+  const o = window.FIRE.painter ? window.FIRE.painter(ctx, z * 1.05) : SHELTER.painter(ctx, z * 1.05);
+  o.t = now / 1000;
+  f(o, x + z / 2, y, z * 1.05, st, 'normal');
+  if (night && F.done) f(o, x + z / 2, y, z * 1.05, 3, 'glow');
+  if (!F.done) {
+    ctx.fillStyle = 'rgba(10,14,10,.6)'; ctx.fillRect(x - z * .1, y - z * 1.15, z * 1.2, Math.max(3, z * .16));
+    ctx.fillStyle = '#ffd54f'; ctx.fillRect(x - z * .1, y - z * 1.15, z * 1.2 * p, Math.max(3, z * .16));
+    ctx.font = `${Math.max(8, z * .26) | 0}px monospace`; ctx.fillStyle = '#ffd54f';
+    ctx.fillText(`${Math.round(p * 100)}%`, x + z * .12, y - z * 1.2);
+  }
 }
 
 // ============ fauna (orientada al destino, con patitas animadas) ============
@@ -676,7 +728,7 @@ function drawSurvivor(x, y, z, c, now) {
   const sleeping = act === 'sleep';
   const praying = act === 'pray';
   const fishing = act === 'fish';
-  const building = ['build_shelter', 'build_altar', 'craft'].includes(act);
+  const building = ['build_shelter', 'build_altar', 'build_fire', 'build_boat', 'craft'].includes(act);
   const ph = sleeping || praying ? 0 : walk ? Math.sin(now / 120 + x) : 0;
   const bounce = walk ? Math.abs(Math.sin(now / 120 + x)) * z * 0.04 : Math.sin(now / 800 + x) * z * 0.015;
   const skin = SKINS[ap.skin != null ? ap.skin : (c.name.charCodeAt(0) + c.name.length) % 4];
@@ -1256,7 +1308,7 @@ function updateRosterSide() {
     const chip = $('chip-' + c.id); if (!chip) continue;
     chip.querySelector('.cstat').textContent = c.alive
       ? `${(snap.leaderId === c.id ? '👑 ' : '')}${c.maslowName} · ${actionLabel(c.action)}${c.inLoveWith ? ' 💗' : ''}`
-      : `murió de ${c.deathCause || '…'}`;
+      : (c.sailedAway ? '⛵ zarpó de la isla' : `murió de ${c.deathCause || '…'}`);
     const bars = chip.querySelectorAll('.mini-bar i');
     const vals = [100 - c.needs.water, 100 - c.needs.food, c.needs.energy, c.needs.health];
     bars.forEach((b, i) => (b.style.width = vals[i] + '%'));
@@ -1264,7 +1316,7 @@ function updateRosterSide() {
     if (pcv) paintPortrait(pcv, c, 13, performance.now() + (c.name.charCodeAt(0) || 0) * 900);
   }
 }
-const ACTION_LABELS = { drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', fish: 'pescando', gather_wood: 'talando', gather_stone: 'juntando piedra', build_shelter: 'construyendo refugio', build_altar: 'levantando altar', pray: 'rezando', talk: 'hablando', gift: 'regalando', teach: 'enseñando', explore: 'explorando', rest: 'descansando', sleep: 'durmiendo', craft: 'fabricando' };
+const ACTION_LABELS = { drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', fish: 'pescando', gather_wood: 'talando', gather_stone: 'juntando piedra', build_shelter: 'construyendo refugio', design_shelter: 'trazando plano de refugio', design_fire: 'trazando plano de fogata', build_fire: 'armando fogata', design_altar: 'trazando plano de altar', build_altar: 'levantando altar', pray: 'rezando', talk: 'hablando', gift: 'regalando', teach: 'enseñando', explore: 'explorando', rest: 'descansando', sleep: 'durmiendo', craft: 'fabricando', design_boat: 'trazando plano de barco', build_boat: 'trabajando en el barco', sail_away: 'zarpando de la isla' };
 const actionLabel = (a) => ACTION_LABELS[a] || '…';
 const WEATHER_LABEL = { clear: '☀ despejado', cloudy: '⛅ nublado', rain: '🌧 lluvia', storm: '⛈ TORMENTA', heat: '🔥 ola de calor', fog: '🌫 niebla' };
 
@@ -1277,7 +1329,7 @@ function selectCitizen(id) {
   const pcv = $('ccPortrait');
   if (pcv && pcv.getContext) paintPortrait(pcv, c, 24);
   $('ccName').textContent = c.name;
-  $('ccStage').textContent = c.alive ? (c.maslowName + ' · ' + actionLabel(c.action)) : ('† ' + (c.deathCause || ''));
+  $('ccStage').textContent = c.alive ? (c.maslowName + ' · ' + actionLabel(c.action)) : (c.sailedAway ? '⛵ zarpó de la isla' : ('† ' + (c.deathCause || '')));
   // badges del header
   const badges = [];
   if (snap.leaderId === c.id) badges.push('<span class="cc-badge">👑 líder</span>');
@@ -1420,6 +1472,13 @@ es.addEventListener('tick', (ev) => {
   const data = JSON.parse(ev.data);
   const prev = snap;
   snap = data; snapAt = performance.now();
+  if (map && data.buildings) map.buildings = data.buildings; // progreso de obras en vivo
+  // los recursos cambian en vivo (se agotan, rebrotan, se descubren): el servidor envia el estado actual
+  if (map) {
+    if (data.bushes) map.bushes = data.bushes;
+    if (data.trees) map.trees = data.trees;
+    if (data.stones) map.stones = data.stones;
+  }
   if (data.fogNew && data.fogNew.length) fogTick(data.fogNew);
   if (prev && prev.citizens.length !== data.citizens.length) buildRosterSide();
   updateRosterSide(); updateTopbar(); updateTicker();

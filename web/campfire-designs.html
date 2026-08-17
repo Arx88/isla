@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISLA — taller de fogatas</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { overflow: auto; background: #060b14; }
+  .shop { max-width: 1500px; margin: 0 auto; padding: 22px 18px 60px; }
+  .shop-head { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+  .shop-head h1 { font-family: var(--mono); font-size: 19px; letter-spacing: 5px; color: var(--gold);
+    text-shadow: 0 0 18px rgba(240,194,100,.3); }
+  .shop-head p { font-size: 12px; color: var(--ink2); flex: 1; min-width: 260px; }
+  .cvwrap { border: 1px solid var(--line); border-radius: 12px; overflow: auto; background: #08131f;
+    box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+  #designs { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<div class="shop">
+  <header class="shop-head">
+    <h1>🔥 TALLER DE FOGATAS</h1>
+    <p>6 candidatos para las fogatas de la isla, con sus 4 etapas de obra (marcado → montado → brasas → encendido), día y noche.
+      La luz de las fogatas es <b>cálida</b> (la divina de los altares es cian). Costos y efectos PROPUESTOS en cada tarjeta;
+      la mecánica se integra después de elegir el set.</p>
+  </header>
+  <div class="cvwrap"><canvas id="designs"></canvas></div>
+</div>
+<script src="/shelter-designs.js"></script>
+<script src="/campfire-designs.js"></script>
+</body>
+</html>

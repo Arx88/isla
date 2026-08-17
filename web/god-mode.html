@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GOD ISLAND — MODO DIOS (prototipo)</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/god-mode.css">
+</head>
+<body class="god-mode">
+
+<!-- ===== TOPBAR: los atributos del DIOS ===== -->
+<header class="gm-top">
+  <div class="gm-brand">
+    <span class="gm-omega">Ω</span>
+    <div>
+      <h1>MODO DIOS</h1>
+      <em>prototipo de mecánicas · v0</em>
+    </div>
+  </div>
+
+  <div class="gm-clock">
+    <b id="gmDay">Día 1</b>
+    <span id="gmTime">06:00</span>
+    <span id="gmWeather" class="gm-weather">despejado</span>
+  </div>
+
+  <div class="gm-godstats">
+    <div class="gm-dev" title="Devoción: la moneda del DIOS. Se gasta en milagros y catástrofes; se gana respondiendo plegarias.">
+      <span class="gm-devicon">✦</span><b id="gmDevotion">60</b>
+    </div>
+    <div class="gm-mood" title="Humor del DIOS: a más humor, más baratas las gracias">
+      <span id="gmMoodFace">🙂</span>
+      <input id="gmMood" type="range" min="0" max="100" value="55">
+      <b id="gmMoodVal">55</b>
+    </div>
+  </div>
+
+  <div class="gm-controls">
+    <button id="gmPause" title="pausar (espacio)">⏸</button>
+    <button class="gm-spd active" data-spd="1">1×</button>
+    <button class="gm-spd" data-spd="2">2×</button>
+    <button class="gm-spd" data-spd="4">4×</button>
+    <button id="gmCodex" class="gm-codex-btn" title="ver todos los crafteables con sus valores">📜 CÓDICE</button>
+    <a class="gm-home" href="/">🏠</a>
+  </div>
+</header>
+
+<!-- ===== MAIN ===== -->
+<main class="gm-main">
+
+  <!-- toolbar de la mano divina -->
+  <nav class="gm-tools" id="gmTools">
+    <button class="gm-tool active" data-tool="hand" data-tip="MANO DIVINA: arrastra aldeanos y animales, arrojálos donde quieras (el mar no perdona)">✋</button>
+    <button class="gm-tool" data-tool="animal" data-tip="SEMBRAR FAUNA (ciervo · conejo · jabalí · cabra · serpiente)">🐗</button>
+    <button class="gm-tool" data-tool="plant" data-tip="SEMBRAR FLORA (arbusto de bayas · árbol · piedra)">🌱</button>
+    <button class="gm-tool" data-tool="cata" data-tip="CATÁSTROFES (rayo · tormenta · calor · peste · meteoro)">☄️</button>
+    <button class="gm-tool" data-tool="miracle" data-tip="MILAGROS (lluvia · ballena varada · viento de fruta · sanar)">✨</button>
+  </nav>
+
+  <!-- submenú de variantes de la herramienta activa -->
+  <div class="gm-subtool hidden" id="gmSubtool"></div>
+
+  <!-- el mundo -->
+  <div class="gm-stage" id="gmStage">
+    <canvas id="gmWorld"></canvas>
+    <div class="gm-cursor-tip hidden" id="gmCursorTip"></div>
+    <div class="gm-hint" id="gmHint">
+      <b>Ω el DIOS despierta.</b>
+      ✋ arrastra criaturas · 🌱 sembrá vida · ☄️ castigá · ✨ bendecí · click derecho sobre un aldeano = mandato divino ·
+      cuando un aldeano rece, decidirás su plegaria. <button id="gmHintClose">entendido</button>
+    </div>
+  </div>
+
+  <!-- panel derecho: plegarias + criatura elegida -->
+  <aside class="gm-side">
+    <section class="gm-prayers">
+      <h2>⛩ PLEGARIAS <span id="gmPrayCount" class="gm-count">0</span></h2>
+      <div class="gm-prayers-list" id="gmPrayers">
+        <p class="gm-empty">Nadie reza todavía… el altar espera.</p>
+      </div>
+    </section>
+    <section class="gm-chosen">
+      <h2>🫀 CRIATURA ELEGIDA</h2>
+      <div class="gm-chosen-body" id="gmChosen">
+        <p class="gm-empty">Tocá un aldeano para inspeccionarlo.</p>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<!-- ===== TICKER ===== -->
+<footer class="gm-ticker" id="gmTicker"></footer>
+
+<!-- ===== CÓDICE: todos los crafteables con sus valores ===== -->
+<div class="gm-modal hidden" id="gmCodexModal">
+  <div class="gm-modal-box">
+    <header>
+      <h2>📜 CÓDICE DEL DIOS — lo que se puede forjar en la isla</h2>
+      <p>valores reales del motor · el precio de las gracias cambia con tu humor (<b id="gmCodexPriceNote"></b>)</p>
+      <button id="gmCodexClose">✕</button>
+    </header>
+    <nav class="gm-codex-tabs">
+      <button class="active" data-tab="graces">✦ Gracias del DIOS</button>
+      <button data-tab="shelters">🛖 Refugios</button>
+      <button data-tab="fires">🔥 Fogatas</button>
+      <button data-tab="altars">🕯️ Altares</button>
+      <button data-tab="boats">⛵ Barcos</button>
+    </nav>
+    <div class="gm-codex-body" id="gmCodexBody"></div>
+    <footer><em>conceder una gracia gasta devoción y requiere que el aldeano pueda pagar los materiales</em></footer>
+  </div>
+</div>
+
+<!-- ===== mandato divino (click derecho) ===== -->
+<div class="gm-menu hidden" id="gmMenu"></div>
+
+<script>
+// diagnóstico visible: cualquier error sale en pantalla (prototipo)
+window.onerror = (msg, src, line, col, err) => {
+  let b = document.getElementById('gmErrBanner');
+  if (!b) { b = document.createElement('div'); b.id = 'gmErrBanner';
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;background:#5c1a2a;color:#ffb4b4;font:12px monospace;padding:10px 14px;border-bottom:2px solid #ef8f8f;white-space:pre-wrap;';
+    document.body.appendChild(b); }
+  b.textContent = 'ERROR: ' + msg + '\n' + (src || '').split('/').pop() + ':' + line + ':' + col + '\n' + ((err && err.stack) || '').slice(0, 500);
+};
+</script>
+<script src="/portrait.js"></script>
+<script src="/shelter-designs.js"></script>
+<script src="/campfire-designs.js"></script>
+<script src="/altar-designs.js"></script>
+<script src="/ship-designs.js"></script>
+<script src="/god-mode.js"></script>
+</body>
+</html>
