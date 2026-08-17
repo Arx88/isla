@@ -68,7 +68,7 @@ fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'chronicle.md'), chronicle);
 fs.writeFileSync(path.join(outDir, 'metrics.json'), JSON.stringify({
   metrics: sim.metrics, god: { devotion: sim.god.devotion, mood: sim.god.mood, granted: sim.god.granted },
-  citizens: sim.citizens.map((c) => ({ name: c.name, alive: c.alive, cause: c.deathCause, maslow: c.maslow, skills: c.skills, stats: c.stats, relations: c.memory.relations, recipes: c.knownRecipes.map((r) => r.id) })),
+  citizens: sim.citizens.map((c) => ({ name: c.name, alive: c.alive, sailedAway: !!c.sailedAway, cause: c.deathCause, maslow: c.maslow, skills: c.skills, stats: c.stats, relations: c.memory.relations, recipes: c.knownRecipes.map((r) => r.id) })),
   checklist,
 }, null, 2));
 

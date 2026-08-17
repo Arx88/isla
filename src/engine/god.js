@@ -1,6 +1,9 @@
 // god.js — el DIOS: economia de devocion, recetas validadas, humor. El LLM imagina; el motor valida.
 import { remember } from './memory.js';
 import { clamp } from './util.js';
+import { altarFx } from './altar.js';
+import { addEmotion } from './body.js';
+import { sailAway } from './boats.js';
 
 // Recetas del catalogo F0. Regla: nada produce comida/agua directamente salvo la huerta (lenta y cara).
 // La devocion se gana despacio y se pudre si nadie reza: un milagro tiene que costar dias de fe.
@@ -44,6 +47,7 @@ export const RECIPES = [
       const { camp } = sim.world;
       sim.world.bushes.push({ x: camp.x + sim.rng.int(-3, 3), y: camp.y + sim.rng.int(-3, 3), amount: 4, max: 4 });
       sim.world.bushes.push({ x: camp.x + sim.rng.int(-3, 3), y: camp.y + sim.rng.int(-3, 3), amount: 4, max: 4 });
+      sim.bumpRes();
       c.blessings.push('farmer');
     },
   },
@@ -54,15 +58,28 @@ export const RECIPES = [
     apply(sim, c) { sim.pendingRain = true; },
   },
   {
-    id: 'boat', name: 'Embarcacion', desc: 'el bote para dejar la isla (la obra de una vida)',
-    cost: { wood: 40, stone: 10 }, devotion: 150, tier: 3,
-    payable(c) { return c.inventory.wood >= 40 && c.inventory.stone >= 10; },
-    apply(sim, c) {
-      c.inventory.wood -= 40; c.inventory.stone -= 10;
-      sim.emit('god', `ZARPA: ${c.name} abandona la isla en su embarcacion. La isla entera lo recuerda.`, 5);
-      for (const o of sim.citizens) if (o.alive && o.id !== c.id) remember(o, { kind: 'epico', text: `${c.name} zarpó de la isla`, salience: 5, emotion: +5 });
-      c.stats.ambitionDone = true;
-    },
+    id: 'torreon', name: 'El Torreón', desc: 'los planos sagrados de una fortaleza inexpugnable: ninguna bestia atacara el campamento',
+    cost: {}, devotion: 60, tier: 3,
+    payable(c) { return c.inventory.wood >= 20 || c.inventory.stone >= 8; },
+    apply(sim, c) { c.blessings.push('torreon'); },
+  },
+  {
+    id: 'gran_fogata', name: 'La Gran Hoguera', desc: 'los planos sagrados de una llama enorme: vision nocturna junto al fuego y las bestias no se acercan',
+    cost: {}, devotion: 50, tier: 3,
+    payable(c) { return c.inventory.wood >= 12; },
+    apply(sim, c) { c.blessings.push('gran_fogata'); },
+  },
+  {
+    id: 'trono', name: 'El Trono', desc: 'los planos sagrados del altar supremo: el DIOS podra conceder dos gracias por dia',
+    cost: {}, devotion: 55, tier: 3,
+    payable(c) { return c.inventory.stone >= 18 && c.inventory.wood >= 10; },
+    apply(sim, c) { c.blessings.push('trono'); },
+  },
+  {
+    id: 'boat', name: 'La Gran Nave', desc: 'los planos sagrados del Galeón: la nave enorme que desafía al horizonte',
+    cost: { wood: 20, stone: 4 }, devotion: 150, tier: 3,
+    payable(c) { return c.inventory.wood >= 20 && c.inventory.stone >= 4; },
+    apply(sim, c) { c.inventory.wood -= 20; c.inventory.stone -= 4; c.blessings.push('gran_nave'); },
   },
 ];
 
@@ -78,16 +95,21 @@ export function priceFor(god, recipe) {
 // validacion motor-side de una decision del DIOS (sea LLM o heuristica)
 export function validateGodDecision(sim, c, plea, decision) {
   const god = sim.god;
+  const fx = altarFx(sim.world);
   const offering = plea.offerResource && plea.offerQty > 0
     ? Math.min(plea.offerQty, c.inventory[plea.offerResource] || 0) : 0;
-  const offeringDevotion = Math.round(offering * 0.8);
+  const offeringDevotion = Math.round(offering * 0.8 * fx.offering);
   god.prayersToday++;
   if (offering > 0 && c.inventory[plea.offerResource] >= offering) {
     c.inventory[plea.offerResource] -= offering;
     god.devotion += offeringDevotion;
   }
-  god.devotion += 1;
-  if (plea.devotionOnly) god.devotion += 1;
+  god.devotion += fx.devotion;
+  if (plea.devotionOnly) god.devotion += fx.devotion;
+  if (fx.calm) {
+    c.mood = clamp((c.mood || 50) + 4, 0, 100);
+    addEmotion(c, 'alegria', 4, 'el Corazón del árbol consagrado calma su ánimo');
+  }
 
   const d = decision || {};
   if (d.decision === 'grant') {
@@ -96,7 +118,7 @@ export function validateGodDecision(sim, c, plea, decision) {
     if (god.mood < 30) {
       return { decision: 'demand_more', reply: 'MI HUMOR ES NEGRO HOY. Reza, y vuelve cuando mi animo cambie.' };
     }
-    if ((god.grantsToday || 0) >= 1) {
+    if ((god.grantsToday || 0) >= 1 + fx.extraGrant) {
       return { decision: 'demand_more', reply: 'YA ENTREGUE UNA GRACIA HOY. Mi generosidad tiene un limite diario. Vuelve manana.' };
     }
     if (c.knownRecipes.some((r) => r.id === recipe.id)) {
@@ -123,7 +145,8 @@ function coerce(god, plea, txt) { return { decision: 'silence', reply: txt }; }
 
 export function godDailyUpdate(sim) {
   const god = sim.god;
-  if (god.prayersToday === 0) god.mood = clamp(god.mood - 9, 0, 100);
+  const fx = altarFx(sim.world);
+  if (god.prayersToday === 0) god.mood = clamp(god.mood - 9 * fx.moodDecay, 0, 100);
   else god.mood = clamp(god.mood + Math.min(8, god.prayersToday * 2), 0, 100);
   // la fe no acumulada se pudre: un DIOS hambriento exige constancia (pierde 15% por noche)
   god.devotion = Math.max(0, Math.floor(god.devotion * 0.85));

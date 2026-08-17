@@ -3,17 +3,29 @@ import { passable } from './worldgen.js';
 import { remember, adjustRel, addFact, markPlace, placeChanged } from './memory.js';
 import { clamp } from './util.js';
 import { skillUp, SKILL_NAME, addEmotion } from './body.js';
+import { designById, unlockedShelterDesigns, costTxt, inProgressShelter,
+  sheltersList, nextShelterSpot, progressTxt } from './shelter.js';
+import { fireDesignById, unlockedFireDesigns, fireCostTxt, firesList, inProgressFire,
+  nextFireSpot, fireProgressTxt } from './fire.js';
+import { altarDesignById, unlockedAltarDesigns, altarCostTxt, altarProgressTxt, altarSpot } from './altar.js';
+import { boatDesignById, unlockedBoatDesigns, boatCostTxt, boatsList, inProgressBoat,
+  doneBoats, bestBoat, nextBoatSpot, boatProgressTxt, sailAway } from './boats.js';
 
 export const CATALOG = {
   drink: { name: 'beber agua', dur: 2, satisfies: 'water', auto: 'water' },
   go_water: { name: 'caminar de vuelta al agua que conoce', dur: 2, satisfies: 'water' },
   eat: { name: 'comer del inventario', dur: 1, satisfies: 'food' },
   forage: { name: 'juntar bayas', dur: 6, satisfies: 'food', auto: 'bush' },
+  hunt: { name: 'cazar un animal (perseguirlo y matarlo por carne)', dur: 6 },
   fish: { name: 'pescar en la orilla', dur: 10, satisfies: 'food', auto: 'fish' },
   gather_wood: { name: 'talar arboles por madera', dur: 8, auto: 'tree' },
   gather_stone: { name: 'juntar piedras', dur: 8, auto: 'stone' },
-  build_shelter: { name: 'construir el refugio (2 madera por turno de trabajo)', dur: 4 },
-  build_altar: { name: 'levantar el altar del DIOS (1 piedra por turno)', dur: 4 },
+  build_shelter: { name: 'trabajar en el refugio en obra (1 madera por turno de trabajo)', dur: 4 },
+  design_shelter: { name: 'dibujar el plano y empezar un refugio nuevo', dur: 1, requires: 'design' },
+  design_fire: { name: 'dibujar el plano y encender una fogata nueva', dur: 1, requires: 'design' },
+  build_fire: { name: 'trabajar en la fogata en obra (1 madera por turno de trabajo)', dur: 4 },
+  build_altar: { name: 'trabajar en la obra del altar (consume los materiales del plano)', dur: 4 },
+  design_altar: { name: 'dibujar el plano del altar del DIOS', dur: 1, requires: 'design' },
   pray: { name: 'rezar al DIOS en el altar', dur: 3, requires: 'altar_done' },
   talk: { name: 'hablar con alguien', requires: 'citizen' },
   gift: { name: 'regalar comida a alguien', dur: 2, requires: 'citizen' },
@@ -23,6 +35,9 @@ export const CATALOG = {
   rest: { name: 'descansar un rato', dur: 4 },
   sleep: { name: 'dormir hasta la manana', special: 'sleep' },
   craft: { name: 'fabricar algo con una receta del DIOS', requires: 'recipe' },
+  design_boat: { name: 'trazar el plano de un barco en la playa', dur: 1, requires: 'design' },
+  build_boat: { name: 'trabajar en el barco en obra (1 madera por turno de trabajo)', dur: 4 },
+  sail_away: { name: 'zarpar de la isla para siempre', dur: 3 },
 };
 
 export function allowedActions(c, per, world) {
@@ -33,17 +48,82 @@ export function allowedActions(c, per, world) {
     let bd = 1e9; for (const k of c.knownWaters) bd = Math.min(bd, Math.hypot(k.x - c.pos.x, k.y - c.pos.y));
     push('go_water', `a ~${Math.round(bd)} pasos`);
   }
-  if (c.inventory.berries + c.inventory.fish > 0) push('eat');
+  if (c.inventory.berries + c.inventory.fish + (c.inventory.meat || 0) > 0) push('eat');
   if (per.bush) push('forage');
+  // cazar: hay un animal a la vista
+  {
+    const prey = (per.animals || []).filter((a) => a.d <= 12);
+    if (prey.length) push('hunt', prey[0].t === 'boar' ? 'un jabalí (peligroso)' : 'un ' + prey[0].t);
+  }
   if (per.fish) push('fish');
   if (per.tree) push('gather_wood');
   if (per.stone) push('gather_stone');
-  if (world.buildings.shelter.progress < world.buildings.shelter.needed
-    && (!world.campFounded || c.knowsCamp) && c.inventory.wood >= 2) push('build_shelter', world.campFounded ? `refugio va ${world.buildings.shelter.progress}/${world.buildings.shelter.needed}` : 'FUNDA un campamento aqui');
-  else if (world.buildings.shelter.progress < world.buildings.shelter.needed && (!world.campFounded || c.knowsCamp)) push('build_shelter', 'te faltan 2 maderas');
-  if (world.campFounded && c.knowsCamp && world.buildings.altar.progress < world.buildings.altar.needed && c.inventory.stone >= 1) push('build_altar', `altar va ${world.buildings.altar.progress}/${world.buildings.altar.needed}`);
-  else if (world.campFounded && c.knowsCamp && world.buildings.altar.progress < world.buildings.altar.needed) push('build_altar', 'te falta 1 piedra');
-  if (world.buildings.altar.done) push('pray');
+  // ===== refugios: el primero FUNDA el campamento; luego se diseña y se obra plano por plano =====
+  if (!world.campFounded) {
+    push('build_shelter', c.inventory.wood >= 2 ? 'FUNDA un campamento aqui (plano: El Hornero)' : 'te faltan 2 maderas para fundar');
+  } else if (c.knowsCamp) {
+    const WIP = inProgressShelter(world);
+    if (WIP) {
+      const dW = designById(WIP.design);
+      const needStone = dW && WIP.progress >= dW.cost.wood && dW.cost.stone > 0;
+      const falta = needStone
+        ? (c.inventory.stone >= 1 ? '' : ' (te falta piedra)')
+        : (c.inventory.wood >= 1 ? '' : ' (te falta 1 madera)');
+      push('build_shelter', progressTxt(WIP) + falta);
+    } else {
+      const known = unlockedShelterDesigns(c).filter((d) => !sheltersList(world).some((s) => s.design === d.id));
+      if (known.length) push('design_shelter', known.map((d) => `${d.name} ${d.icon} [${costTxt(d)}]`).join(' / '));
+    }
+    // fogatas: se diseñan alrededor del fuego central (una por diseño)
+    {
+      const WIPf = inProgressFire(world);
+      if (WIPf) {
+        const dWf = fireDesignById(WIPf.design);
+        const needStoneF = dWf && WIPf.progress >= dWf.cost.wood && dWf.cost.stone > 0;
+        const faltaF = needStoneF
+          ? (c.inventory.stone >= 1 ? '' : ' (te falta piedra)')
+          : (c.inventory.wood >= 1 ? '' : ' (te falta 1 madera)');
+        push('build_fire', fireProgressTxt(WIPf) + faltaF);
+      } else {
+        const knownF = unlockedFireDesigns(c).filter((d) => !firesList(world).some((s) => s.design === d.id));
+        if (knownF.length) push('design_fire', knownF.map((d) => `${d.name} ${d.icon} [${fireCostTxt(d)}]`).join(' / '));
+      }
+    }
+  }
+  // ===== ALTAR del DIOS: se traza qué altar levantar (design_altar) y luego se obra =====
+  if (world.campFounded && c.knowsCamp) {
+    const A = world.buildings.altar;
+    if (A.done) push('pray');
+    else if (A.design) {
+      const dA = altarDesignById(A.design);
+      const needStone = A.progress >= dA.cost.wood && dA.cost.stone > 0;
+      const falta = needStone
+        ? (c.inventory.stone >= 1 ? '' : ' (te falta piedra)')
+        : (c.inventory.wood >= 1 ? '' : ' (te falta 1 madera)');
+      push('build_altar', altarProgressTxt(A) + falta);
+    } else {
+      const knownA = unlockedAltarDesigns(c);
+      if (knownA.length) push('design_altar', knownA.map((d) => `${d.name} ${d.icon} [${altarCostTxt(d)}] (${d.blurb})`).join(' / '));
+    }
+  }
+  // ===== BARCOS: la obra grande. Se traza un plano en la playa, se construye, y cuando esta botado se puede ZARPAR =====
+  if (world.campFounded && c.knowsCamp) {
+    const BWIP = inProgressBoat(world);
+    if (BWIP) {
+      const dB = boatDesignById(BWIP.design);
+      const needStoneB = dB && BWIP.progress >= dB.cost.wood && dB.cost.stone > 0;
+      const faltaB = needStoneB
+        ? (c.inventory.stone >= 1 ? '' : ' (te falta piedra)')
+        : (c.inventory.wood >= 1 ? '' : ' (te falta 1 madera)');
+      push('build_boat', boatProgressTxt(BWIP) + faltaB);
+    } else {
+      const knownB = unlockedBoatDesigns(c).filter((d) => !boatsList(world).some((s) => s.design === d.id));
+      if (knownB.length) push('design_boat', knownB.map((d) => `${d.name} ${d.icon} [${boatCostTxt(d)}] navega ${d.fx.range} brazadas`).join(' / '));
+    }
+    if (doneBoats(world).length) {
+      push('sail_away', bestBoat(world) ? `en ${boatDesignById(bestBoat(world).design).name}` : 'en un barco botado');
+    }
+  }
   const near = per.others.filter((o) => o.dist <= 30);
   if (near.length) push('talk', near.map((o) => o.name).join('/'));
   if (near.length && c.inventory.berries + c.inventory.fish > 1) push('gift', near.map((o) => o.name).join('/'));
@@ -162,16 +242,98 @@ export function startAction(sim, c, id, targetRef, openingSay = null) {
       }
     }
   }
+  if (id === 'hunt') {
+    // el blanco es el animal mas cercano visto; se persigue en vivo
+    const an = (sim.perCache[c.id] && sim.perCache[c.id].animals || []).filter((a) => a.d <= 14);
+    if (!an.length) return { ok: false, why: 'no ves ningun animal' };
+    const ref = (sim.world.animals || []).find((w) => w.type === an[0].t
+      && Math.abs(w.x - an[0].x) < 2 && Math.abs(w.y - an[0].y) < 2);
+    if (!ref) return { ok: false, why: 'el animal ya no esta ahi' };
+    target = { x: ref.x, y: ref.y, animal: ref, huntType: ref.type };
+  }
   if (id === 'craft') {
     const r = c.knownRecipes.find((x) => x.id === targetRef || x.name === targetRef);
     if (!r || !r.payable(c)) return { ok: false, why: 'no conoces o no puedes pagar esa receta' };
     target = null;
   }
   if (id === 'build_shelter') {
-    if (sim.world.campFounded && c.knowsCamp) target = { ...sim.world.buildings.shelter };
-    else target = null; // lo funda donde esta parado
+    const WIP = inProgressShelter(sim.world);
+    if (sim.world.campFounded && c.knowsCamp && WIP) target = { ...WIP };
+    else if (!sim.world.campFounded) target = null; // lo funda donde esta parado
+    else return { ok: false, why: 'no hay ninguna obra de refugio en marcha' };
   }
-  if (id === 'build_altar') target = { ...sim.world.buildings.altar };
+  if (id === 'design_shelter') {
+    const known = unlockedShelterDesigns(c).filter((d) => !sheltersList(sim.world).some((s) => s.design === d.id));
+    let d = null;
+    if (targetRef) {
+      const t = String(targetRef).trim().toLowerCase();
+      d = known.find((x) => x.id === t) || known.find((x) => x.name.toLowerCase().includes(t)) || known.find((x) => t.includes(x.id));
+    }
+    if (!d) d = known[0];
+    if (!d) return { ok: false, why: 'no conoces ningun plano nuevo para dibujar' };
+    if (!sim.world.campFounded || !c.knowsCamp) return { ok: false, why: 'no hay campamento donde levantar el plano' };
+    target = { x: sim.world.camp.x, y: sim.world.camp.y, design: d.id };
+  }
+  if (id === 'design_fire') {
+    const known = unlockedFireDesigns(c).filter((d) => !firesList(sim.world).some((s) => s.design === d.id));
+    let d = null;
+    if (targetRef) {
+      const t = String(targetRef).trim().toLowerCase();
+      d = known.find((x) => x.id === t) || known.find((x) => x.name.toLowerCase().includes(t)) || known.find((x) => t.includes(x.id));
+    }
+    if (!d) d = known[0];
+    if (!d) return { ok: false, why: 'no conoces ningún plano nuevo de fogata para encender' };
+    if (!sim.world.campFounded || !c.knowsCamp) return { ok: false, why: 'no hay campamento donde encender la fogata' };
+    target = { x: sim.world.camp.x, y: sim.world.camp.y, design: d.id };
+  }
+  if (id === 'build_fire') {
+    const WIP = inProgressFire(sim.world);
+    if (WIP) target = { ...WIP };
+    else return { ok: false, why: 'no hay ninguna fogata en obra' };
+  }
+  if (id === 'design_altar') {
+    const known = unlockedAltarDesigns(c);
+    let d = null;
+    if (targetRef) {
+      const t = String(targetRef).trim().toLowerCase();
+      d = known.find((x) => x.id === t) || known.find((x) => x.name.toLowerCase().includes(t)) || known.find((x) => t.includes(x.id));
+    }
+    if (!d) d = known[0];
+    if (!d) return { ok: false, why: 'no conoces ningun diseño de altar digno' };
+    if (!sim.world.campFounded || !c.knowsCamp) return { ok: false, why: 'no hay campamento donde consagrar el altar' };
+    const spot = altarSpot(sim.world);
+    target = { x: spot.x, y: spot.y, design: d.id };
+  }
+  if (id === 'build_altar') {
+    const A = sim.world.buildings.altar;
+    if (!A.design) return { ok: false, why: 'el altar no tiene plano: nadie trazó cómo honrar al DIOS (design_altar)' };
+    target = { ...A };
+  }
+  if (id === 'design_boat') {
+    const known = unlockedBoatDesigns(c).filter((d) => !boatsList(sim.world).some((s) => s.design === d.id));
+    let d = null;
+    if (targetRef) {
+      const t = String(targetRef).trim().toLowerCase();
+      d = known.find((x) => x.id === t) || known.find((x) => x.name.toLowerCase().includes(t)) || known.find((x) => t.includes(x.id));
+    }
+    if (!d) d = known[0];
+    if (!d) return { ok: false, why: 'no conoces ningun plano nuevo de barco para trazar' };
+    if (!sim.world.campFounded || !c.knowsCamp) return { ok: false, why: 'no hay campamento cerca de la playa donde botar un barco' };
+    const spot = nextBoatSpot(sim.world);
+    if (!spot) return { ok: false, why: 'no queda playa libre cerca del campamento para botar el barco' };
+    target = { x: spot.x, y: spot.y, design: d.id };
+  }
+  if (id === 'build_boat') {
+    const WIP = inProgressBoat(sim.world);
+    if (!WIP) return { ok: false, why: 'no hay ningun barco en obra' };
+    target = { ...WIP };
+  }
+  if (id === 'sail_away') {
+    const B = bestBoat(sim.world);
+    if (!B) return { ok: false, why: 'no hay ningun barco botado en la playa' };
+    if (sim.weather === 'storm') return { ok: false, why: 'nadie zarpa con tormenta: el mar te traga' };
+    target = { x: B.x, y: B.y };
+  }
   if (cat.requires === 'altar_done' && !sim.world.buildings.altar.done) return { ok: false, why: 'no hay altar' };
   c.action = { id, target, phase: target ? 'walk' : 'work', workLeft: cat.dur || 1, stuck: 0 };
   if (openingSay) c.action.openSay = openingSay;
@@ -202,6 +364,10 @@ export async function stepAction(sim, c) {
   }
 
   if (a.phase === 'walk' && a.target) {
+    if (a.target.animal) { // la presa se mueve: perseguir en vivo
+      const an = a.target.animal;
+      a.target.x = an.x; a.target.y = an.y;
+    }
     if (a.target.citizen) {
       const o = sim.citizens.find((x) => x.alive && x.id === a.target.citizen);
       if (o) { a.target.x = o.pos.x; a.target.y = o.pos.y; }
@@ -229,7 +395,7 @@ export async function stepAction(sim, c) {
 }
 
 function finish(sim, c, evtText, failText) {
-  const wasId = c.action.id;
+  const wasId = c.action ? c.action.id : null;
   c.action = null;
   if (failText) return { kind: 'fail', text: `${c.name} ${failText}`, action: wasId };
   if (evtText) return { kind: 'done', text: `${c.name} ${evtText}`, action: wasId };
@@ -286,8 +452,12 @@ async function resolve(sim, c, a) {
       return finish(sim, c, `le roba comida a ${o.name} mientras nadie mira`);
     }
     case 'eat': {
-      if (inv.fish > 0) { inv.fish--; c.needs.food = clamp(c.needs.food - 45, 0, 100); return finish(sim, c, 'come un pescado'); }
-      if (inv.berries > 0) { inv.berries--; c.needs.food = clamp(c.needs.food - 32, 0, 100); return finish(sim, c, 'come bayas'); }
+      // La Estrella: comer junto a su brasa rinde el doble
+      const fenv = c._fireEnv || {};
+      const mul = (fenv.estrella && fenv.near) ? 2 : 1;
+      if ((inv.meat || 0) > 0) { inv.meat--; c.needs.food = clamp(c.needs.food - 48 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'devora carne asada junto a La Estrella: rinde el doble' : 'devora carne asada'); }
+      if (inv.fish > 0) { inv.fish--; c.needs.food = clamp(c.needs.food - 45 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'come un pescado sobre la brasa de La Estrella: rinde el doble' : 'come un pescado'); }
+      if (inv.berries > 0) { inv.berries--; c.needs.food = clamp(c.needs.food - 32 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'come bayas al calor de La Estrella: rinden el doble' : 'come bayas'); }
       return finish(sim, c, null, 'busca comida en su mochila... vacia');
     }
     case 'forage': {
@@ -295,6 +465,7 @@ async function resolve(sim, c, a) {
       if (!b || b.amount <= 0) return finish(sim, c, null, 'encuentra el arbusto vacio');
       const prev = markPlace(c, b.x, b.y, 'comida', `${b.amount} raciones`);
       b.amount--; inv.berries += c.skills.forage >= 50 ? 4 : 3;
+      sim.bumpRes();
       skillUp(c, 'forage');
       // el mapa mental registra el CAMBIO: esto ya no es lo que era
       const changed = placeChanged(c, prev, 'comida', `${b.amount} raciones`);
@@ -316,6 +487,7 @@ async function resolve(sim, c, a) {
       const t = a.target;
       if (!t || t.amount <= 0) return finish(sim, c, null, 'los arboles ya estaban talados');
       t.amount--; inv.wood += (c.blessings.includes('axe') ? 3 : 2) + (c.skills.gather >= 70 ? 1 : 0);
+      sim.bumpRes();
       skillUp(c, 'gather');
       markPlace(c, t.x, t.y, 'madera', `${t.amount} arboles`);
       return finish(sim, c, 'tala y apila madera');
@@ -324,50 +496,260 @@ async function resolve(sim, c, a) {
       const s = a.target;
       if (!s || s.amount <= 0) return finish(sim, c, null, 'no queda piedra ahi');
       s.amount--; inv.stone += 2 + (c.skills.gather >= 70 ? 1 : 0);
+      sim.bumpRes();
       skillUp(c, 'gather');
       markPlace(c, s.x, s.y, 'piedra', `${s.amount} restantes`);
       return finish(sim, c, 'carga piedras');
     }
-    case 'build_shelter': {
-      if (inv.wood < 2) return finish(sim, c, null, 'quiere seguir el refugio pero no tiene maderas');
-      inv.wood -= 2;
-      skillUp(c, 'build');
-      const B = world.buildings.shelter;
-      if (!world.campFounded) {
-        // FUNDACION: el primer refugio marca el campamento de la temporada
-        world.campFounded = true;
-        world.camp = { x: c.pos.x + 1, y: c.pos.y };
-        B.x = world.camp.x; B.y = world.camp.y;
-        B.founder = c.name;
-        c.knowsCamp = true;
-        markPlace(c, B.x, B.y, 'refugio', 'campamento propio');
-        sim.emit('isla', `${c.name} FUNDA el primer campamento de la temporada`, 5);
-        for (const o of sim.citizens) if (o.alive && o.id !== c.id) {
-          addFact(o, `hay un campamento en la isla (fundado por ${c.name}); aun no sabe donde es`);
-        }
-        remember(c, { kind: 'logro', text: 'fundó el campamento', salience: 5, emotion: 10 });
-        return finish(sim, c, 'clava las primeras estacas: nace un campamento');
+    case 'design_shelter': {
+      const d = designById(a.target.design);
+      if (!d) return finish(sim, c, null, 'pierde el hilo del plano que quería dibujar');
+      const unlockedNow = unlockedShelterDesigns(c).some((x) => x.id === d.id);
+      if (!unlockedNow) {
+        return finish(sim, c, null, `intentó dibujar ${d.name} pero le falta oficio${d.unlock.god ? ' (o la palabra del DIOS)' : ` (construcción ${d.unlock.build})`}`);
       }
-      B.progress += c.skills.build >= 70 ? 2 : 1;
+      if (sheltersList(world).some((s) => s.design === d.id)) {
+        return finish(sim, c, null, `quería dibujar ${d.name} pero ya hay uno levantado`);
+      }
+      const spot = nextShelterSpot(world);
+      const B = { design: d.id, progress: 0, needed: d.cost.wood + d.cost.stone, done: false, x: spot.x, y: spot.y, founder: c.name };
+      world.buildings.shelter.push(B);
+      skillUp(c, 'build', 0.4);
+      markPlace(c, spot.x, spot.y, 'refugio', `${d.name} en construcción`);
+      remember(c, { kind: 'logro', text: `dibujó el plano de ${d.name} y clavó las primeras estacas`, salience: 3, emotion: +6 });
+      addEmotion(c, 'orgullo', 8, 'diseñar con sus propias manos');
+      sim.emit('isla', `${c.name} dibuja el plano de ${d.name} ${d.icon}: nace una obra nueva en el campamento (${costTxt(d)})`, 4);
+      return finish(sim, c, `traza el plano de ${d.name} y marca el terreno`);
+    }
+    case 'build_shelter': {
+      let B = world.buildings.shelter.find((s) => !s.done && Math.hypot(s.x - c.pos.x, s.y - c.pos.y) < 3) || null;
+      if (!B) {
+        if (!world.campFounded) {
+          // FUNDACION: el primer refugio (El Hornero) marca el campamento de la temporada
+          if (inv.wood < 2) return finish(sim, c, null, 'quiere fundar un refugio pero no tiene maderas');
+          inv.wood -= 2;
+          skillUp(c, 'build');
+          const spot = nextShelterSpot(world);
+          world.campFounded = true;
+          world.camp = { x: c.pos.x + 1, y: c.pos.y };
+          B = { design: 'horno', progress: 2, needed: designById('horno').cost.wood, done: false, x: spot.x, y: spot.y, founder: c.name };
+          world.buildings.shelter.push(B);
+          world.buildings.founder = c.name;
+          c.knowsCamp = true;
+          markPlace(c, B.x, B.y, 'refugio', 'campamento propio');
+          sim.emit('isla', `${c.name} FUNDA el primer campamento de la temporada`, 5);
+          for (const o of sim.citizens) if (o.alive && o.id !== c.id) {
+            addFact(o, `hay un campamento en la isla (fundado por ${c.name}); aun no sabe donde es`);
+          }
+          remember(c, { kind: 'logro', text: 'fundó el campamento', salience: 5, emotion: 10 });
+          return finish(sim, c, 'clava las primeras estacas: nace un campamento');
+        }
+        B = inProgressShelter(world);
+        if (!B) return finish(sim, c, null, 'busca la obra del refugio pero no hay ninguna en marcha');
+        // caminar a la obra si quedó lejos (ej: la encontró otro)
+        if (Math.hypot(B.x - c.pos.x, B.y - c.pos.y) > 2.5) {
+          stepToward(c, world, B);
+          return finish(sim, c, `camina a la obra del refugio (${progressTxt(B)})`);
+        }
+      }
+      const d = designById(B.design);
+      // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
+      const woodLeft = Math.max(0, d.cost.wood - B.progress);
+      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      let inc;
+      if (woodLeft > 0) {
+        inc = Math.min(inc0, woodLeft, inv.wood);
+        if (inc <= 0) return finish(sim, c, null, `quiere seguir ${d.name} pero no le queda madera (faltan ${woodLeft})`);
+        inv.wood -= inc;
+      } else {
+        const stoneLeft = Math.max(0, B.needed - B.progress);
+        inc = Math.min(inc0, stoneLeft, inv.stone);
+        if (inc <= 0) return finish(sim, c, null, `${d.name} pide ${stoneLeft} piedra mas (carga ${inv.stone})`);
+        inv.stone -= inc;
+      }
+      skillUp(c, 'build');
+      B.progress += inc;
       if (B.progress >= B.needed && !B.done) {
         B.done = true;
-        for (const o of sim.citizens) if (o.alive) remember(o, { kind: 'logro', text: 'el refugio del campamento quedo terminado', salience: 3, emotion: +8 });
-        return finish(sim, c, 'pone la ultima viga: el refugio esta TERMINADO');
+        for (const o of sim.citizens) if (o.alive) remember(o, { kind: 'logro', text: `${d ? d.name : 'el refugio'} del campamento quedó terminado`, salience: 3, emotion: +8 });
+        sim.emit('isla', `${d ? d.icon : ''} ${d ? d.name.toUpperCase() : 'EL REFUGIO'} del campamento está TERMINADO: ${d ? d.blurb : ''}`, 4);
+        addEmotion(c, 'orgullo', 10, 'terminar una obra con sus manos');
+        return finish(sim, c, `pone la última viga: ${d ? d.name : 'el refugio'} está TERMINADO`);
       }
-      return finish(sim, c, `trabaja en el refugio (${Math.min(B.progress, B.needed)}/${B.needed})`);
+      return finish(sim, c, `trabaja en el refugio (${progressTxt(B)})`);
+    }
+    case 'design_fire': {
+      const d = fireDesignById(a.target.design);
+      if (!d) return finish(sim, c, null, 'pierde el hilo de la fogata que quería encender');
+      const unlockedNow = unlockedFireDesigns(c).some((x) => x.id === d.id);
+      if (!unlockedNow) {
+        return finish(sim, c, null, `intentó encender ${d.name} pero le falta oficio${d.unlock.god ? ' (o la palabra del DIOS)' : ` (construcción ${d.unlock.build})`}`);
+      }
+      if (firesList(world).some((s) => s.design === d.id)) {
+        return finish(sim, c, null, `quería encender ${d.name} pero ya arde una igual`);
+      }
+      const spot = nextFireSpot(world);
+      const B = { design: d.id, progress: 0, needed: d.cost.wood + d.cost.stone, done: false, x: spot.x, y: spot.y, founder: c.name };
+      world.buildings.fire.push(B);
+      skillUp(c, 'build', 0.4);
+      markPlace(c, spot.x, spot.y, 'fogata', `${d.name} en obra`);
+      remember(c, { kind: 'logro', text: `dibujó el plano de la fogata ${d.name} y la empezó a armar`, salience: 3, emotion: +6 });
+      addEmotion(c, 'orgullo', 8, 'prender un fuego nuevo con sus manos');
+      sim.emit('isla', `${c.name} traza el plano de la fogata ${d.name} ${d.icon}: nace un fuego nuevo junto al del campamento (${fireCostTxt(d)})`, 4);
+      return finish(sim, c, `traza el plano de ${d.name} y apila la primera leña`);
+    }
+    case 'build_fire': {
+      let B = firesList(world).find((s) => !s.done && Math.hypot(s.x - c.pos.x, s.y - c.pos.y) < 3) || null;
+      if (!B) {
+        B = inProgressFire(world);
+        if (!B) return finish(sim, c, null, 'busca la leña de la fogata pero no hay ninguna en obra');
+        if (Math.hypot(B.x - c.pos.x, B.y - c.pos.y) > 2.5) {
+          stepToward(c, world, B);
+          return finish(sim, c, `camina a la leña de la fogata (${fireProgressTxt(B)})`);
+        }
+      }
+      const d = fireDesignById(B.design);
+      // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
+      const woodLeft = Math.max(0, d.cost.wood - B.progress);
+      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      let inc;
+      if (woodLeft > 0) {
+        inc = Math.min(inc0, woodLeft, inv.wood);
+        if (inc <= 0) return finish(sim, c, null, `quiere seguir ${d.name} pero no le queda madera (faltan ${woodLeft})`);
+        inv.wood -= inc;
+      } else {
+        const stoneLeft = Math.max(0, B.needed - B.progress);
+        inc = Math.min(inc0, stoneLeft, inv.stone);
+        if (inc <= 0) return finish(sim, c, null, `${d.name} pide ${stoneLeft} piedra mas (carga ${inv.stone})`);
+        inv.stone -= inc;
+      }
+      skillUp(c, 'build');
+      B.progress += inc;
+      if (B.progress >= B.needed && !B.done) {
+        B.done = true;
+        for (const o of sim.citizens) if (o.alive) remember(o, { kind: 'logro', text: `la fogata ${d ? d.name : 'nueva'} quedó encendida junto al campamento`, salience: 3, emotion: +8 });
+        sim.emit('isla', `${d ? d.icon : ''} ${d ? d.name.toUpperCase() : 'LA FOGATA'} está ENCENDIDA junto al campamento: ${d ? d.blurb : ''}`, 4);
+        addEmotion(c, 'orgullo', 10, 'ver arder un fuego que uno mismo levantó');
+        return finish(sim, c, `enciende la primera llama: ${d ? d.name : 'la fogata'} está ENCENDIDA`);
+      }
+      return finish(sim, c, `apila leña para la fogata (${fireProgressTxt(B)})`);
+    }
+    case 'design_altar': {
+      const d = altarDesignById(a.target.design);
+      const A = world.buildings.altar;
+      if (!d) return finish(sim, c, null, 'pierde el hilo del altar que iba a trazar');
+      if (A.done) return finish(sim, c, null, 'el altar del DIOS ya está en pie');
+      if (A.design) return finish(sim, c, null, 'ya hay un plano de altar trazado; primero termínalo');
+      const unlockedNow = unlockedAltarDesigns(c).some((x) => x.id === d.id);
+      if (!unlockedNow) {
+        return finish(sim, c, null, `intentó trazar ${d.name} pero le falta oficio${d.unlock.god ? ' (o la palabra del DIOS)' : ` (construcción ${d.unlock.build})`}`);
+      }
+      A.design = d.id;
+      A.needed = d.cost.stone + d.cost.wood;
+      A.progress = 0;
+      A.founder = c.name;
+      skillUp(c, 'build', 0.4);
+      markPlace(c, A.x, A.y, 'altar', `${d.name} en construcción`);
+      remember(c, { kind: 'logro', text: `trazó el plano del altar de ${d.name} para honrar al DIOS`, salience: 4, emotion: +8 });
+      addEmotion(c, 'orgullo', 9, 'dibujar la casa del DIOS con sus manos');
+      sim.emit('isla', `${c.name} traza el plano del ALTAR de ${d.name} ${d.icon}: el campamento decide con qué honrar al DIOS (${altarCostTxt(d)})`, 4);
+      return finish(sim, c, `traza el plano sagrado de ${d.name} junto al fuego`);
     }
     case 'build_altar': {
-      if (inv.stone < 1) return finish(sim, c, null, 'quiere levantar el altar pero no tiene piedra');
-      inv.stone -= 1;
+      const A = world.buildings.altar;
+      if (A.done) return finish(sim, c, null, 'el altar ya está en pie');
+      if (!A.design) return finish(sim, c, null, 'quiere levantar el altar pero nadie ha trazado un plano (design_altar)');
+      const dA = altarDesignById(A.design);
+      // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
+      const woodLeft = Math.max(0, dA.cost.wood - A.progress);
+      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      let inc;
+      if (woodLeft > 0) {
+        inc = Math.min(inc0, woodLeft, inv.wood);
+        if (inc <= 0) return finish(sim, c, null, `quiere seguir ${dA.name} pero no le queda madera (faltan ${woodLeft})`);
+        inv.wood -= inc;
+      } else {
+        const stoneLeft = Math.max(0, A.needed - A.progress);
+        inc = Math.min(inc0, stoneLeft, inv.stone);
+        if (inc <= 0) return finish(sim, c, null, `${dA.name} pide ${stoneLeft} piedra mas (carga ${inv.stone})`);
+        inv.stone -= inc;
+      }
       skillUp(c, 'build');
-      const B = world.buildings.altar;
-      B.progress += c.skills.build >= 70 ? 2 : 1;
+      A.progress += inc;
+      if (A.progress >= A.needed && !A.done) {
+        A.done = true;
+        for (const o of sim.citizens) if (o.alive) remember(o, { kind: 'logro', text: `el altar de ${dA.name} fue consagrado al DIOS`, salience: 4, emotion: +8 });
+        sim.emit('dios', `${dA.icon} ${dA.name.toUpperCase()}: EL ALTAR DEL DIOS ESTÁ EN PIE. ${dA.blurb}`, 5);
+        addEmotion(c, 'orgullo', 14, 'consagrar una casa al DIOS');
+      return finish(sim, c, `coloca la última piedra: ${dA.name} queda CONSAGRADO`);
+      }
+      return finish(sim, c, `trabaja en el altar (${altarProgressTxt(A)})`);
+    }
+    case 'design_boat': {
+      const d = boatDesignById(a.target.design);
+      if (!d) return finish(sim, c, null, 'pierde el hilo del barco que iba a trazar');
+      const unlockedNow = unlockedBoatDesigns(c).some((x) => x.id === d.id);
+      if (!unlockedNow) {
+        return finish(sim, c, null, `intentó trazar ${d.name} pero le falta oficio${d.unlock.god ? ' (o la palabra del DIOS)' : ` (construcción ${d.unlock.build})`}`);
+      }
+      if (boatsList(world).some((s) => s.design === d.id)) {
+        return finish(sim, c, null, `quería trazar ${d.name} pero ya hay uno varado en la playa`);
+      }
+      const spot = { x: a.target.x, y: a.target.y };
+      const B = { design: d.id, progress: 0, needed: d.cost.wood + d.cost.stone, done: false, sailed: false, x: spot.x, y: spot.y, founder: c.name };
+      world.buildings.boats.push(B);
+      skillUp(c, 'build', 0.4);
+      markPlace(c, spot.x, spot.y, 'barco', `${d.name} en obra`);
+      remember(c, { kind: 'logro', text: `trazó el plano de ${d.name} en la playa: la nave que lo sacara de la isla`, salience: 4, emotion: +8 });
+      addEmotion(c, 'orgullo', 8, 'dibujar su propia nave');
+      sim.emit('isla', `${c.name} traza el plano de ${d.name} ${d.icon} en la playa: empieza la obra de una vida (${boatCostTxt(d)}, navega ${d.fx.range} brazadas)`, 4);
+      return finish(sim, c, `traza ${d.name} en la arena de la playa`);
+    }
+    case 'build_boat': {
+      let B = boatsList(world).find((s) => !s.done && Math.hypot(s.x - c.pos.x, s.y - c.pos.y) < 3) || null;
+      if (!B) {
+        B = inProgressBoat(world);
+        if (!B) return finish(sim, c, null, 'busca la obra del barco pero no hay ninguna en marcha');
+        if (Math.hypot(B.x - c.pos.x, B.y - c.pos.y) > 2.5) {
+          stepToward(c, world, B);
+          return finish(sim, c, `camina a la playa donde se arma el barco (${boatProgressTxt(B)})`);
+        }
+      }
+      const d = boatDesignById(B.design);
+      // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
+      const woodLeft = Math.max(0, d.cost.wood - B.progress);
+      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      let inc;
+      if (woodLeft > 0) {
+        inc = Math.min(inc0, woodLeft, inv.wood);
+        if (inc <= 0) return finish(sim, c, null, `quiere seguir ${d.name} pero no le queda madera (faltan ${woodLeft})`);
+        inv.wood -= inc;
+      } else {
+        const stoneLeft = Math.max(0, B.needed - B.progress);
+        inc = Math.min(inc0, stoneLeft, inv.stone);
+        if (inc <= 0) return finish(sim, c, null, `${d.name} pide ${stoneLeft} piedra mas (carga ${inv.stone})`);
+        inv.stone -= inc;
+      }
+      skillUp(c, 'build');
+      B.progress += inc;
       if (B.progress >= B.needed && !B.done) {
         B.done = true;
-        for (const o of sim.citizens) if (o.alive) remember(o, { kind: 'logro', text: 'el altar del DIOS fue levantado', salience: 3, emotion: +5 });
-        return finish(sim, c, 'coloca la ultima piedra: el ALTAR del DIOS esta en pie');
+        for (const o of sim.citizens) if (o.alive) remember(o, { kind: 'logro', text: `${d ? d.name : 'el barco'} quedó BOTADO en la playa`, salience: 4, emotion: +9 });
+        sim.emit('isla', `${d ? d.icon : ''} ${d ? d.name.toUpperCase() : 'EL BARCO'} ESTA BOTADO: ${c.name} termina la nave que puede sacarlo de la isla`, 5);
+        addEmotion(c, 'orgullo', 16, 'ver flotar la nave de sus manos');
+        return finish(sim, c, `empuja ${d ? d.name : 'el barco'} al agua: esta BOTADO`);
       }
-      return finish(sim, c, `apila piedras para el altar (${Math.min(B.progress, B.needed)}/${B.needed})`);
+      return finish(sim, c, `trabaja en el barco (${boatProgressTxt(B)})`);
+    }
+    case 'sail_away': {
+      const B = bestBoat(world);
+      if (!B) return finish(sim, c, null, 'corre a la playa pero no hay ningun barco botado');
+      if (sim.weather === 'storm') return finish(sim, c, null, 'mira el mar picado y espera: con tormenta nadie zarpa');
+      const d = boatDesignById(B.design);
+      B.sailed = true; B.sailedBy = c.name; B.sailedDay = sim.day;
+      remember(c, { kind: 'epico', text: `zarpo de la isla en ${d ? d.name : 'su barco'}`, salience: 5, emotion: +15 });
+      sailAway(sim, c, d ? `en ${d.name}` : 'en su barco');
+      return { kind: 'done', text: `${c.name} se despide y sube a bordo`, action: 'sail_away' };
     }
     case 'teach': {
       const o = sim.citizens.find((x) => x.id === a.target.citizen);
@@ -423,9 +805,42 @@ async function resolve(sim, c, a) {
       remember(c, { kind: 'exploracion', text: 'exploro tierra desconocida', salience: 1 });
       if (found) {
         const spot = { x: c.pos.x + sim.rng.int(-2, 2), y: c.pos.y + sim.rng.int(-2, 2) };
-        if (passable(world, spot.x, spot.y)) { world.stones.push({ x: spot.x, y: spot.y, amount: 3 }); addFact(c, `hay un deposito de piedras cerca de (${spot.x},${spot.y})`); return finish(sim, c, 'explora y descubre un deposito de piedras'); }
+        if (passable(world, spot.x, spot.y)) { world.stones.push({ x: spot.x, y: spot.y, amount: 3 }); sim.bumpRes(); addFact(c, `hay un deposito de piedras cerca de (${spot.x},${spot.y})`); return finish(sim, c, 'explora y descubre un deposito de piedras'); }
       }
       return finish(sim, c, 'explora la isla, abriendo camino');
+    }
+    case 'hunt': {
+      const an = a.target && a.target.animal;
+      if (!an) return finish(sim, c, null, 'perdio el rastro del animal');
+      const w = sim.world;
+      const MEAT = { deer: 4, boar: 5, goat: 3, rabbit: 2, snake: 1 };
+      // exitos: agilidad + punteria; el jabali contraataca si fallas
+      let chance = 0.32 + (c.attrs ? c.attrs.agilidad * 0.045 : 0) + (c.skills.hunt || 0) / 220;
+      if (an.type === 'rabbit') chance += 0.18;
+      if (an.type === 'boar') chance -= 0.1;
+      skillUp(c, 'hunt');
+      if (sim.rng.chance(Math.min(0.85, chance))) {
+        const meat = MEAT[an.type] || 2;
+        inv.meat = (inv.meat || 0) + meat;
+        const idx = w.animals.indexOf(an);
+        if (idx >= 0) w.animals.splice(idx, 1);
+        markPlace(c, c.pos.x, c.pos.y, 'comida', `carne de ${an.type}`);
+        addEmotion(c, 'orgullo', 12, 'traer carne a la mesa');
+        sim.emit('caza', `${c.name} CAZA ${an.type === 'boar' ? 'un jabalí' : an.type === 'deer' ? 'un ciervo' : 'un ' + an.type}: +${meat} de carne`, 4);
+        return finish(sim, c, `derriba al animal y desuza la presa (+${meat} carne)`);
+      }
+      // fallo: la presa huye; el jabali puede girar y atacar
+      an.tx = an.x + (an.x - c.pos.x) * 4; an.ty = an.y + (an.y - c.pos.y) * 4;
+      if (an.type === 'boar' && sim.rng.chance(0.4)) {
+        const dmg = 8 + sim.rng.int(0, 12);
+        c.needs.health = clamp(c.needs.health - dmg, 0, 100);
+        addEmotion(c, 'miedo', 25, 'el jabali contraataco');
+        c.visualSay = { text: '¡se me vino encima!', until: sim.abs + 4 };
+        sim.emit('ataque', `El jabalí contraataca a ${c.name} (-${dmg} salud)`, 4);
+        return finish(sim, c, `falla el golpe y el jabalí lo embiste (-${dmg} salud)`);
+      }
+      addEmotion(c, 'verguenza', 6, 'fallar la caza');
+      return finish(sim, c, `persigue al ${an.type} pero se le escucha entre la vegetación`);
     }
     case 'rest': {
       c.needs.energy = clamp(c.needs.energy + 14, 0, 100);

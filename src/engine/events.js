@@ -2,6 +2,7 @@
 import { addFact, remember } from './memory.js';
 import { addEmotion, isNight } from './body.js';
 import { passable } from './worldgen.js';
+import { shelterFx } from './shelter.js';
 
 function dirName(from, to) {
   const dx = to.x - from.x, dy = to.y - from.y;
@@ -48,6 +49,7 @@ export function createEvents() {
         if (spot) {
           state.fruits++;
           w.bushes.push({ x: spot.x, y: spot.y, amount: 3, max: 3, ephemeral: true });
+          sim.bumpRes();
           w.wonders.push({ x: spot.x, y: spot.y, kind: 'fruit', day: sim.day, seen: false });
           sim.emit('isla', `Un viento dulce cruza la isla trayendo olor a fruta madura, ${dirName(w.camp, spot)}`, 4);
           for (const c of alive) {
@@ -91,6 +93,7 @@ export function createEvents() {
         if (spot) {
           state.whale = true;
           w.bushes.push({ x: spot.x, y: spot.y, amount: 14, max: 14, kind: 'whale', startDay: sim.day });
+          sim.bumpRes();
           w.wonders.push({ x: spot.x, y: spot.y, kind: 'whale', day: sim.day, seen: false });
           sim.emit('isla', `UNA BALLENA VARADA en la playa ${dirName(w.camp, spot)}. Hay carne para dias.`, 5);
           for (const c of alive) {
@@ -138,19 +141,45 @@ export function createEvents() {
       // jabalies que bajan al campamento y arruinan la comida
       if (!night && sim.rng.chance(0.003)) {
         const w = sim.world;
+        const fx = shelterFx(w);
         const boars = w.animals.filter((a) => a.type === 'boar' && Math.hypot(a.x - w.camp.x, a.y - w.camp.y) < 40);
         if (boars.length) {
-          const nearBush = w.bushes
-            .filter((b) => !b.kind && Math.hypot(b.x - w.camp.x, b.y - w.camp.y) < 24)
-            .sort((p, q) => Math.hypot(p.x - w.camp.x, p.y - w.camp.y) - Math.hypot(q.x - w.camp.x, q.y - w.camp.y))[0];
-          if (nearBush && nearBush.amount > 0) {
-            const lost = nearBush.amount;
-            nearBush.amount = 0;
-            sim.emit('isla', `UNA PIARA DE JABALIES baja al campamento y destroza un arbusto (${lost} raciones de bayas al piso)`, 4);
-            for (const c of alive) {
-              if (Math.hypot(c.pos.x - nearBush.x, c.pos.y - nearBush.y) < 16) {
-                addEmotion(c, 'miedo', 14, 'la piara en el campamento');
-                remember(c, { kind: 'susto', text: 'una piara de jabalies arrasó la comida del campamento', salience: 3, emotion: -5 });
+          // fortaleza: el Torreón (y en menor medida La Copa) no deja entrar a las bestias
+          if (fx.torreon) {
+            sim.emit('isla', `UNA PIARA DE JABALIES baja al campamento... y se topa con el TORREÓN. Grunendo, se dan media vuelta.`, 4);
+            for (const a of boars) { a.tx = a.x + (a.x - w.camp.x) * 3; a.ty = a.y + (a.y - w.camp.y) * 3; }
+            for (const c of alive) if (Math.hypot(c.pos.x - w.camp.x, c.pos.y - w.camp.y) < 12) {
+              addEmotion(c, 'orgullo', 8, 'el Torreón ahuyentó a la piara');
+              remember(c, { kind: 'susto', text: 'una piara intentó entrar al campamento pero el Torreón la espantó', salience: 3, emotion: +4 });
+            }
+          } else if (fx.copa) {
+            // La Copa: la copa de hojas desconcierta a las bestias, solo entran si insisten
+            const nearBush = w.bushes
+              .filter((b) => !b.kind && Math.hypot(b.x - w.camp.x, b.y - w.camp.y) < 24)
+              .sort((p, q) => Math.hypot(p.x - w.camp.x, p.y - w.camp.y) - Math.hypot(q.x - w.camp.x, q.y - w.camp.y))[0];
+            if (nearBush && nearBush.amount > 0 && sim.rng.chance(0.35)) {
+              const lost = nearBush.amount;
+              nearBush.amount = 0;
+              sim.bumpRes();
+              sim.emit('isla', `UNA PIARA DE JABALIES ronda La Copa; solo unas pocas entran y destrozan un arbusto (${lost} raciones al piso)`, 3);
+            } else {
+              sim.emit('isla', `UNA PIARA DE JABALIES merodea el campamento, pero La Copa las mantiene a raya`, 3);
+              for (const a of boars) { a.tx = a.x + (a.x - w.camp.x) * 2; a.ty = a.y + (a.y - w.camp.y) * 2; }
+            }
+          } else {
+            const nearBush = w.bushes
+              .filter((b) => !b.kind && Math.hypot(b.x - w.camp.x, b.y - w.camp.y) < 24)
+              .sort((p, q) => Math.hypot(p.x - w.camp.x, p.y - w.camp.y) - Math.hypot(q.x - w.camp.x, q.y - w.camp.y))[0];
+            if (nearBush && nearBush.amount > 0) {
+              const lost = nearBush.amount;
+              nearBush.amount = 0;
+              sim.bumpRes();
+              sim.emit('isla', `UNA PIARA DE JABALIES baja al campamento y destroza un arbusto (${lost} raciones de bayas al piso)`, 4);
+              for (const c of alive) {
+                if (Math.hypot(c.pos.x - nearBush.x, c.pos.y - nearBush.y) < 16) {
+                  addEmotion(c, 'miedo', 14, 'la piara en el campamento');
+                  remember(c, { kind: 'susto', text: 'una piara de jabalies arrasó la comida del campamento', salience: 3, emotion: -5 });
+                }
               }
             }
           }

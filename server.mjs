@@ -83,6 +83,7 @@ let tickMs = 2500;           // 1 tick (5 min de juego) cada 2.5s reales -> 1 di
 let paused = false;
 let loopRunning = false;
 let clients = new Set();
+let lastResV = -1;            // ultima version de recursos enviada a los clientes
 
 function providerFor(name) {
   if (name === 'ollama') return createOllama({ model: DEFAULT_MODEL });
@@ -97,7 +98,7 @@ function snapshot(full = false) {
     provider: sim.provider.name, model: DEFAULT_MODEL, tickMs, paused,
     god: { devotion: Math.round(sim.god.devotion), mood: Math.round(sim.god.mood), granted: sim.god.granted },
     citizens: sim.citizens.map((c) => ({
-      id: c.id, name: c.name, color: c.color, alive: c.alive, deathCause: c.deathCause, sick: c.sick > 0,
+      id: c.id, name: c.name, color: c.color, alive: c.alive, sailedAway: !!c.sailedAway, deathCause: c.deathCause, sick: c.sick > 0,
       appearance: c.appearance, x: c.pos.x, y: c.pos.y, px: c._px ?? c.pos.x, py: c._py ?? c.pos.y,
       needs: { water: Math.round(c.needs.water), food: Math.round(c.needs.food), energy: Math.round(c.needs.energy), health: Math.round(c.needs.health) },
       mood: Math.round(c.mood), maslow: c.maslow, maslowName: MASLOW[c.maslow],
@@ -119,9 +120,19 @@ function snapshot(full = false) {
     })),
     animals: w.animals.map((a) => ({ t: a.type, x: Math.round(a.x * 10) / 10, y: Math.round(a.y * 10) / 10, tx: Math.round(a.tx * 10) / 10, ty: Math.round(a.ty * 10) / 10 })),
     leaderId: sim.leaderId || null,
+    // el progreso de las obras se envia en cada tick (el mapa completo solo en el reset)
+    buildings: { shelter: w.buildings.shelter, fire: w.buildings.fire || [], altar: w.buildings.altar, founder: w.buildings.founder || null, boats: w.buildings.boats || [] },
+    // los recursos se envian solo cuando cambian (versionado por sim.bumpRes)
     fogNew: w.newDiscovered ? w.newDiscovered.splice(0) : [],
     events: sim.events.slice(-40).map((e, i) => ({ ...e, key: sim.events.length - Math.min(40, sim.events.length) + i })),
   };
+  const resV = w.resVersion || 0;
+  if (full || resV !== lastResV) {
+    base.bushes = w.bushes.map((b) => ({ x: b.x, y: b.y, a: b.amount, k: b.kind || null }));
+    base.trees = w.trees.map((t) => ({ x: t.x, y: t.y, a: t.amount }));
+    base.stones = w.stones.map((s) => ({ x: s.x, y: s.y, a: s.amount }));
+    lastResV = resV;
+  }
   if (full) {
     const fogIdx = [];
     if (w.knownUnion) for (let i = 0; i < w.knownUnion.length; i++) if (w.knownUnion[i]) fogIdx.push(i);
@@ -129,9 +140,10 @@ function snapshot(full = false) {
       w: w.w, h: w.h, biome: Array.from(w.biome), fertile: Array.from(w.fertile),
       camp: w.camp, campFounded: !!w.campFounded, buildings: w.buildings, waterfalls: w.waterfalls,
       wonders: (w.wonders || []).map((x) => ({ x: x.x, y: x.y, kind: x.kind, seen: x.seen })),
-      bushes: w.bushes.map((b) => ({ x: b.x, y: b.y, a: b.amount })),
+      bushes: w.bushes.map((b) => ({ x: b.x, y: b.y, a: b.amount, k: b.kind || null })),
       trees: w.trees.map((t) => ({ x: t.x, y: t.y, a: t.amount })),
       stones: w.stones.map((s) => ({ x: s.x, y: s.y, a: s.amount })),
+      boats: w.buildings.boats || [],
       water: w.waterSources.map((s) => ({ x: s.x, y: s.y, k: s.kind, fx: s.fx || 0, fy: s.fy || 1 })),
       graves: w.graves,
       fogIdx,
@@ -155,6 +167,7 @@ async function startSeason({ seed = Math.floor(Math.random() * 99999), citizens 
     onDay(day, s) { console.log(`  dia ${day}: vivos=${s.citizens.filter((c) => c.alive).length} devocion=${Math.round(s.god.devotion)}`); },
   });
   paused = false;
+  lastResV = -1;
   broadcast('reset', snapshot(true));
   if (!loopRunning) { loopRunning = true; runLoop(); }
   console.log(`Temporada iniciada: seed=${seed} provider=${provider}`);
@@ -236,7 +249,6 @@ const server = http.createServer(async (req, res) => {
         abs: sim.abs, day: sim.day, tick: sim.tick, citizens: sim.citizens.length,
         llmCalls: m.llmCalls, llmErrors: m.llmErrors,
         totalCalls: Object.values(m.llmCalls).reduce((s, v) => s + v, 0),
-        fallbacks: m.deliberations.fallbacks,
       });
       return;
     }

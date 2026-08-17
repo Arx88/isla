@@ -11,9 +11,12 @@ export function mkTraits({ estoico = 0, ansioso = 0, devoto = 0, sociable = 0, t
   return { estoico, ansioso, devoto, sociable, trabajador };
 }
 
-export function updateBody(c, { tick, raining, shelterDone = true, weather = 'clear' }) {
+export function updateBody(c, { tick, raining, shelterEnv, fireEnv, weather = 'clear' }) {
   const night = isNight(tick);
   const sleeping = c.action && c.action.id === 'sleep';
+  const fx = shelterEnv || { any: false, inside: false, near: false, copa: false, larga: false, atalaya: false, dospisos: false, torreon: false };
+  const sheltered = fx.inside;
+  const fenv = fireEnv || { any: false, near: false, beside: false };
   const heat = weather === 'heat';
   // sed y hambre calibradas para dejar VIVIR: sed ~24h hasta morir, hambre ~3 dias
   // (si la supervivencia lo es todo, el menu colapsa a 3 acciones y nadie vive: hay que dejar margen)
@@ -21,12 +24,19 @@ export function updateBody(c, { tick, raining, shelterDone = true, weather = 'cl
   c.needs.water = clamp(c.needs.water + (night ? 0.13 : 0.26) * wMul - (raining && !sleeping ? 0.15 : 0), 0, 100);
   c.needs.food = clamp(c.needs.food + (night ? 0.07 : 0.115), 0, 100);
   // noches frias a la intemperie (antes del refugio) desgastan; tormenta de noche, peor
-  if (night && sleeping && !shelterDone) c.needs.health = clamp(c.needs.health - (weather === 'storm' ? 0.16 : 0.08), 0, 100);
+  if (night && sleeping && !sheltered) {
+    let drain = weather === 'storm' ? 0.16 : 0.08;
+    if (fenv.near && (fenv.tipi || fenv.cabana || fenv.estrella)) drain *= 0.4; // warmNight: el fuego abraza
+    c.needs.health = clamp(c.needs.health - drain, 0, 100);
+  }
   // energia
   if (sleeping) {
     // dormir a la intemperie no es dormir tranquilo: el miedo desvela, la compaia calma
     let regen = 0.95 * (c.blessings.includes('bed') ? 1.3 : 1);
-    if (!shelterDone) {
+    if (fx.copa && fx.near) regen *= 1.15;        // La Copa: dormir cerca rinde +15%
+    if (fx.dospisos && fx.near) regen *= 1.08;     // Dos Pisos / chimenea: calienta y anima
+    if (fenv.cabana && fenv.near) regen *= 1.15;   // La Cabana: brasas que duran toda la noche
+    if (!sheltered) {
       const fear = (c.emotions && c.emotions.miedo) || 0;
       const company = (c._others || []).some((o) => o.alive && Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y) < 7);
       regen -= fear > 40 ? 0.28 : 0.12;
@@ -53,7 +63,13 @@ export function updateBody(c, { tick, raining, shelterDone = true, weather = 'cl
   const strain = Math.max(0, c.needs.water - 70) / 30 + Math.max(0, c.needs.food - 70) / 30
     + Math.max(0, 30 - c.needs.energy) / 30 + Math.max(0, 60 - c.needs.health) / 60
     + weatherStrain / 14;
-  const target = clamp(72 - strain * 18 + c.moodBias, 5, 100);
+  // La Atalaya calma el miedo en tormenta; Dos Pisos da ánimo de noche cerca del fuego
+  let bonus = 0;
+  if (fx.atalaya && weather === 'storm') bonus += 4;
+  if (fx.dospisos && fx.near && night) bonus += 2;
+  if (fx.larga && fx.near && night) bonus += 1;   // La Larga abriga de noche
+  if (fenv.near && night) bonus += 1;             // noche junto al fuego
+  const target = clamp(72 - strain * 18 + c.moodBias + bonus, 5, 100);
   c.mood = clamp(c.mood + (target - c.mood) * 0.01, 0, 100);
 }
 
@@ -101,7 +117,7 @@ export function urgency(c) {
 export function maslowLayer(c, world, others) {
   const avgNeed = (c.needs.water + c.needs.food + c.needs.energy) / 3;
   const l1 = avgNeed < 70 && c.needs.health > 60;
-  const shelter = world.buildings.shelter.done;
+  const shelter = (world.buildings.shelter || []).some((s) => s.done);
   const stock = c.inventory.berries + c.inventory.fish * 1.5 >= 3;
   const l2 = l1 && (shelter || stock);
   const rels = Object.values(c.memory.relations);
@@ -157,14 +173,18 @@ export function emotionWords(c) {
 }
 
 // ===== temperatura corporal (frio de noche, calor en ola) =====
-export function updateTemp(c, { tick, weather, shelterDone }) {
+export function updateTemp(c, { tick, weather, shelterEnv, heat = 0, fireNear = false }) {
   const night = isNight(tick);
-  const sleeping = c.action && c.action.id === 'sleep';
-  const outside = !shelterDone;
+  const fx = shelterEnv || { any: false, inside: false, near: false, larga: false, dospisos: false };
+  const outside = !fx.inside;
   let dt = 0;
   if (night && outside) dt -= weather === 'storm' ? 0.10 : 0.055;
   else if (weather === 'heat' && !night) dt += 0.09;
   else dt += (36.8 - c.temp) * 0.03; // tiende a 36.8
+  // La Larga abriga de noche; la chimenea de Dos Pisos calienta cerca del fuego
+  if (night && (fx.larga || fx.dospisos) && fx.near) dt += 0.07;
+  // las fogatas encendidas irradian calor (el Pozo sigue ardiendo bajo lluvia)
+  if (night && fireNear && heat > 0) dt += Math.min(0.12, 0.05 + heat * 0.04);
   c.temp = clamp(c.temp + dt, 35.2, 39.2);
   if (c.temp < 36.0) { c.needs.health = clamp(c.needs.health - 0.03, 0, 100); addEmotion(c, 'miedo', 0.4, 'el frio de la noche'); }
   if (c.temp > 37.9) { c.needs.water = clamp(c.needs.water + 0.08, 0, 100); c.needs.energy = clamp(c.needs.energy - 0.05, 0, 100); }
@@ -181,9 +201,9 @@ export function rollAttributes(seedStr) {
 export const MASLOW_NAME = ['colapsado', 'sobreviviendo', 'seguro', 'perteneciendo', 'reconocido', 'realizado'];
 
 // ===== destrezas: aprendizaje manual con curva (retornos decrecientes, modulado por rasgos) =====
-export const SKILL_NAME = { fish: 'pesca', forage: 'recoleccion', gather: 'tala y mineria', build: 'construccion' };
+export const SKILL_NAME = { fish: 'pesca', forage: 'recoleccion', gather: 'tala y mineria', build: 'construccion', hunt: 'caza' };
 
-export function mkSkills() { return { fish: 10, forage: 10, gather: 10, build: 10 }; }
+export function mkSkills() { return { fish: 10, forage: 10, gather: 10, build: 10, hunt: 10 }; }
 
 export function skillUp(c, key, mult = 1) {
   if (!(key in c.skills)) return;

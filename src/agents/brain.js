@@ -14,10 +14,15 @@ export function buildDecisionMessages(ctx) {
   const islandRecent = (ctx.islandRecent && ctx.islandRecent.length)
     ? `\nULTIMAS FRASES OYERON EN LA ISLA (no las digas ni parecidas): ${ctx.islandRecent.slice(-8).map((s) => `"${s}"`).join('; ')}` : '';
   const soledad = ctx.soledad || ctx.vocacion || ctx.curiosityLine ? `\n${[ctx.soledad, ctx.vocacion, ctx.curiosityLine].filter(Boolean).join(' ')}` : '';
+  // FIX vitalidad: la explicacion de "target" solo nombra las acciones de diseño que ESTAN en el menu.
+  // Antes el system prompt mencionaba design_altar/design_shelter/etc. aunque no estuvieran disponibles,
+  // y el modelo las elegia igual -> fallo de parseo -> fallback heuristico.
+  const designInMenu = menu.filter((m) => ['design_shelter', 'design_altar', 'design_fire', 'design_boat'].includes(m.id)).map((m) => m.id);
+  const targetHint = designInMenu.length ? `; para ${designInMenu.join(' o ')}, el nombre del plano elegido` : '';
   const system = `Sos la mente de ${c.name}, un naufrago en una isla. NO sos narrador ni estratega: decidis y hablas como ${c.name}.
 Respondes SOLO un objeto JSON valido, sin markdown ni explicaciones:
-{"action":"<id exacto de ACCIONES>","target":"<nombre de la persona si la accion lo pide, si no null>","say":"<frase corta, max 10 palabras>","think":"<tu pensamiento PRIVADO, max 12 palabras, lo que de verdad piensas o sentis y no decis>","goal":"<opcional: un proposito propio para estos dias, max 10 palabras>"}
-Si usas target/goal y no aplican, ponelos como null. Si dudas entre dos acciones, elegi una sola y no expliques.
+{"action":"<id EXACTO de la lista ACCIONES POSIBLES, ni uno mas ni uno menos>","target":"<nombre de la persona si la accion lo pide${targetHint}; si no null>","say":"<frase corta, max 10 palabras>","think":"<tu pensamiento PRIVADO, max 12 palabras, lo que de verdad piensas o sentis y no decis>","goal":"<opcional: un proposito propio para estos dias, max 10 palabras>"}
+Si usas target/goal y no aplican, ponelos como null. Si dudas entre dos acciones, elegi una sola y no expliques. PROHIBIDO inventar acciones que no esten en la lista.
 Sobre el "say": es lo que decis EN VOZ ALTA al ponerte en marcha. Debe sonar a persona real y a ${c.name}, espontaneo, con su humor y su manera de hablar. PROHIBIDO el tono de planificador ("es eficiente", "necesito recursos", "debo priorizar"). Cambia la frase SIEMPRE: nunca repitas ni parafrasees una frase anterior.
 Sobre el "think": es tu monologo interior — puede ser distinto de lo que decis (miedo, deseo, calculo, nostalgia). Honesto y humano.`;
   const user = `QUIEN SOS: ${c.instructivo}
@@ -79,14 +84,15 @@ export function parseDecision(text, menu) {
 
 export function buildDialogueMessages(ctx) {
   const system = `Sos ${ctx.speaker.name}, naufrago en una isla, en una charla con ${ctx.listener.name}.
-Hablas como hablaria ${ctx.speaker.name}: una sola frase corta (max 12 palabras), natural.
+QUIEN SOS: ${ctx.speaker.instructivo || 'un naufrago mas'}
+Hablas como hablaria ${ctx.speaker.name}: una sola frase corta (max 12 palabras), natural, con SU caracter y SU manera de hablar.
 RESPONDES SIEMPRE EN ESPANOL, jamas en otro idioma.
 Respondé a lo ultimo que dijo tu compañero, no cambies de tema gratis.
 Respondes SOLO JSON: {"say":"..."}`;
   const rel = ctx.listener.rel;
   const relTxt = rel >= 20 ? `Consideras a ${ctx.listener.name} un amigo.` : rel <= -10 ? `Desconfias de ${ctx.listener.name}.` : `A ${ctx.listener.name} apenas lo conoces.`;
-  const user = `Tu animo: ${ctx.speaker.mood}/100. ${ctx.emotionLine || ''}${ctx.leader ? ' ' + ctx.leader : ''}
-Relacion con ${ctx.listener.name}: ${ctx.listener.rel >= 20 ? 'amistad' : ctx.listener.rel <= -20 ? 'malos terminos' : 'neutral'} (${ctx.listener.rel}).
+  const user = `Tu animo: ${ctx.speaker.mood}/100. ${ctx.emotionLine || ''}${ctx.emotionsShort ? ' ' + ctx.emotionsShort : ''}${ctx.leader ? ' ' + ctx.leader : ''}
+Relacion con ${ctx.listener.name}: ${relTxt} (${ctx.listener.rel}).
 Charla hasta ahora:
 ${ctx.recentLines.length ? ctx.recentLines.join('\n') : '(recien empiezan a hablar)'}
 Tus ultimas vivencias: ${ctx.speakerMemory.join('; ') || 'poco todavia'}

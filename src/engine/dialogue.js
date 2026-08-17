@@ -79,10 +79,15 @@ function buildCtx(sim, speaker, listener, convo) {
   const love = speaker.inLoveWith === listener.id ? ' ESTAS ENAMORADO de quien te escucha.' : '';
   const angry = rel <= -20 ? ' Te hierve la sangre con esta persona.' : '';
   const fear = speaker.emotions && speaker.emotions.miedo > 40 ? ' Estas asustado.' : '';
+  // emociones dominantes compactas: solo las que arden (>25), en orden de intensidad
+  const emo = speaker.emotions || {};
+  const hot = Object.entries(emo).filter(([, v]) => v > 25).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, v]) => `${k} ${Math.round(v)}`).join(', ');
   return {
     speaker: { name: speaker.name, instructivo: speaker.instructivo, mood: Math.round(speaker.mood), maslow: speaker.maslow },
-    listener: { name: listener.name, rel, doing: listener.action ? listener.action.id : 'nada' },
+    listener: { name: listener.name, instructivo: listener.instructivo, rel, doing: listener.action ? listener.action.id : 'nada' },
     emotionLine: `${love}${angry}${fear}`,
+    emotionsShort: hot ? `Te quema por dentro: ${hot}.` : '',
     leader: sim.leaderId ? (sim.leaderId === speaker.id ? 'Sos el lider del grupo.' : `${(sim.citizens.find((x) => x.id === sim.leaderId) || {}).name} es el lider.`) : '',
     recentLines: convo.lines.slice(-4).map((l) => `${l.by}: "${l.text}"`),
     speakerMemory: speaker.memory.recent.filter((e) => e.salience >= 2).slice(-3).map((e) => e.text),

@@ -10,3 +10,6 @@ runs/
 
 # dependencias
 node_modules/
+
+# artefactos de prueba
+vision_test.png

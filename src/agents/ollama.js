@@ -5,13 +5,15 @@ import { makeLimiter } from './limiter.js';
 
 const lim = makeLimiter({ concurrency: 1, minSpacingMs: 300 });
 
-async function chatOnce(model, messages, { temperature, maxTokens, timeoutMs, baseUrl }) {
+async function chatOnce(model, messages, { temperature, maxTokens, timeoutMs, baseUrl, format }) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
+    const body = { model, stream: false, think: false, options: { temperature, num_predict: maxTokens }, messages };
+    if (format) body.format = format; // 'json' fuerza salida JSON valida (mata la mayoria de fallos de parseo)
     const r = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, signal: ctrl.signal,
-      body: JSON.stringify({ model, stream: false, think: false, options: { temperature, num_predict: maxTokens }, messages }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) { const err = new Error(`ollama HTTP ${r.status}`); err.status = r.status; throw err; }
     const j = await r.json();
@@ -21,11 +23,11 @@ async function chatOnce(model, messages, { temperature, maxTokens, timeoutMs, ba
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function chat(model, messages, { temperature = 0.6, maxTokens = 220, timeoutMs = 60000, baseUrl = 'http://localhost:11434' } = {}) {
+async function chat(model, messages, { temperature = 0.6, maxTokens = 220, timeoutMs = 60000, baseUrl = 'http://localhost:11434', format } = {}) {
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const release = await lim.acquire(baseUrl);
-    try { return await chatOnce(model, messages, { temperature, maxTokens, timeoutMs, baseUrl }); }
+    try { return await chatOnce(model, messages, { temperature, maxTokens, timeoutMs, baseUrl, format }); }
     catch (e) {
       lastErr = e;
       const retryable = e.status === 429 || (e.status >= 500) || /abort|timeout|fetch/i.test(e.message);
@@ -37,7 +39,7 @@ async function chat(model, messages, { temperature = 0.6, maxTokens = 220, timeo
 }
 
 export function createOllama({ model = 'qwen2.5:7b', baseUrl = 'http://localhost:11434', temperature = 0.6 } = {}) {
-  const ask = (messages, opts) => chat(model, messages, { temperature, baseUrl, ...opts });
+  const ask = (messages, opts) => chat(model, messages, { temperature, baseUrl, format: 'json', ...opts });
   return {
     name: 'ollama',
     model,

@@ -11,6 +11,9 @@ import { createGod, validateGodDecision, godDailyUpdate, RECIPES } from './god.j
 import { startConversation, tickConversations } from './dialogue.js';
 import { createEvents } from './events.js';
 import { createHeuristic } from '../agents/heuristic.js';
+import { shelterEnv, shelterFx, anyShelterDone, inProgressShelter } from './shelter.js';
+import { fireEnv, fireFx, fireHeat, anyFireDone, inProgressFire, unlockedFireDesigns, firesList as firesListWorld } from './fire.js';
+import { altarOf, unlockedAltarDesigns, altarCostTxt } from './altar.js';
 
 export function createCitizen(def, world, i, total) {
   const c = {
@@ -21,7 +24,7 @@ export function createCitizen(def, world, i, total) {
     mood: 68, moodBias: 0, sick: 0, skills: mkSkills(),
     emotions: mkEmotions(), temp: 36.8, attrs: def.attrs || rollAttributes(def.name + def.id + (i + 1)),
     thoughtLog: [], currentGoal: null, inLoveWith: null,
-    inventory: { berries: 1, fish: 0, wood: 0, stone: 0 },
+    inventory: { berries: 1, fish: 0, meat: 0, wood: 0, stone: 0 },
     memory: { recent: [], relations: {}, facts: [], places: {} },
     met: new Set(), knowsCamp: false, convoLog: [],
     habits: {}, knownRecipes: [], blessings: [], knownTiles: new Set(), knownWaters: [],
@@ -101,7 +104,7 @@ export function createSim(cfg) {
     day: 1, tick: 71, abs: 71, conversations: [], pendingRain: false, raining: false, weather: 'clear',
     events: [], perCache: {}, worldEvents: createEvents(),
     metrics: {
-      deaths: [], deliberations: { total: 0, byAction: {}, fallbacks: 0 }, habitUses: 0,
+      deaths: [], deliberations: { total: 0, byAction: {} }, habitUses: 0,
       says: [], recentSaySet: new Set(), conversations: 0, prayers: 0, grants: 0,
       llmCalls: { decide: 0, dialogue: 0, plea: 0, god: 0 }, llmErrors: {},
       maslowMax: {}, crisisTicks: 0, nearDeathTicks: 0, teachings: 0,
@@ -137,6 +140,7 @@ export function createSim(cfg) {
       return 'oye la respuesta del DIOS';
     },
     startConversation(a, b) { if (startConversation(this, a, b)) this.metrics.conversations++; },
+    bumpRes() { this.world.resVersion = (this.world.resVersion || 0) + 1; },
     // celos: si el ser amado se junta con otro, duele
     romanceCheck(aId, bId) {
       for (const x of this.citizens) {
@@ -169,19 +173,28 @@ export async function simTick(sim) {
   sim.tick = sim.abs % TICKS_PER_DAY;
   if (sim.tick === 287) await endOfDay(sim);
   if (sim.abs % 2 === 0) tickAnimals(sim.world);
+  // depredadores: la fauna reacciona a los naufragos (muerde, cornamenta, espanta)
+  if (sim.abs % 3 === 0) predatorPass(sim);
   sim.worldEvents.tick(sim);
   await tickConversations(sim);
 
   for (const c of sim.citizens) {
     if (!c.alive) continue;
     c._simDay = sim.day; c._simTick = sim.tick; c._simAbs = sim.abs; c._others = sim.citizens;
-    updateBody(c, { tick: sim.tick, raining: sim.raining, shelterDone: sim.world.buildings.shelter.done, weather: sim.weather });
-    updateTemp(c, { tick: sim.tick, weather: sim.weather, shelterDone: sim.world.buildings.shelter.done });
+    const env = shelterEnv(sim.world, c);
+    c._shelterEnv = env;
+    const fenv = fireEnv(sim.world, c);
+    c._fireEnv = fenv;
+    updateBody(c, { tick: sim.tick, raining: sim.raining, shelterEnv: env, fireEnv: fenv, weather: sim.weather });
+    updateTemp(c, { tick: sim.tick, weather: sim.weather, shelterEnv: env, heat: fireHeat(sim.world, sim.weather), fireNear: fenv.near });
     decayEmotions(c);
     // el miedo crece de noche a la intemperie y con tormenta / bestias cerca
-    const outside = !sim.world.buildings.shelter.done;
-    if (isNight(sim.tick) && outside) addEmotion(c, 'miedo', 0.8, 'la oscuridad a la intemperie');
-    if (sim.weather === 'storm') addEmotion(c, 'miedo', 0.5, 'la tormenta');
+    const outside = !env.inside;
+    if (isNight(sim.tick) && outside) addEmotion(c, 'miedo', fenv.near ? 0.4 : 0.8, 'la oscuridad a la intemperie');
+    let stormFear = 0.5;
+    if (sim.weather === 'storm' && env.atalaya && env.near) stormFear = 0.1; // la Atalaya calma
+    if (sim.weather === 'storm' && fenv.cortaviento && fenv.near) stormFear = 0.1; // el Cortavientos calma
+    if (sim.weather === 'storm') addEmotion(c, 'miedo', stormFear, 'la tormenta');
     if (c.needs.health < 35) addEmotion(c, 'miedo', 0.6, 'el cuerpo que falla');
     if (c.needs.food > 92) addEmotion(c, 'tristeza', 0.3, 'el hambre que muerde');
     // curiosidad: rasgo de personalidad (el loco la tiene al maximo, el pragmatico casi nada)
@@ -190,7 +203,16 @@ export async function simTick(sim) {
       const curio = 0.1 + (1 - (c.traits.estoico || 0)) * 0.1 + ((c.traits.curioso != null ? c.traits.curioso : 0.5)) * 0.2;
       c.curiosity = Math.min(100, (c.curiosity || 0) + curio);
     }
-    // PRIMER ENCUENTRO: ver a otro ser humano en esta isla (cada uno llego solo)
+    // mojarse: la lluvia empapa, la noche empapado enferma
+    const durmiendoRefugio = c.action && c.action.id === 'sleep' && env.inside;
+    if (sim.raining && !durmiendoRefugio) c.wet = Math.min(100, (c.wet || 0) + 1.4);
+    else c.wet = Math.max(0, (c.wet || 0) - (env.any ? (env.larga ? 4 : 2) : 0.8)); // La Larga seca la ropa el doble
+    if ((c.wet || 0) > 65 && isNight(sim.tick) && sim.rng.chance(0.004) && !c.sick) {
+      c.sick = 0.3;
+      sim.emit('clima', `${c.name} amanece EMPAPADO y con fiebre: la lluvia lo cobró`, 3);
+      remember(c, { kind: 'trauma', text: 'se empapo bajo la lluvia y enfermo', salience: 3, emotion: -6 });
+      addEmotion(c, 'tristeza', 10, 'la fiebre');
+    }
     for (const o of sim.citizens) {
       if (o.id === c.id || !o.alive || c.met.has(o.id)) continue;
       if (Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y) > 6) continue;
@@ -214,7 +236,7 @@ export async function simTick(sim) {
       }
     }
     // pesadillas a la intemperie con miedo: el sueno de un naufrago no es tranquilo
-    if (c.action && c.action.id === 'sleep' && !sim.world.buildings.shelter.done
+    if (c.action && c.action.id === 'sleep' && !env.inside
       && (c.emotions.miedo || 0) > 55 && sim.rng.chance(0.01)) {
       sim.emit('sueno', `${c.name} se agita dormido: pesadillas con la tormenta y el mar`, 2);
       c.visualSay = { text: 'no... el agua no...', until: sim.abs + 4 };
@@ -224,9 +246,10 @@ export async function simTick(sim) {
     if (sim.world.campFounded && !c.knowsCamp
       && Math.hypot(c.pos.x - sim.world.camp.x, c.pos.y - sim.world.camp.y) < 8) {
       c.knowsCamp = true;
-      addFact(c, `encontro el campamento que fundo ${sim.world.buildings.shelter.founder || 'otro naufrago'}`);
+      const founder = sim.world.buildings.founder || 'otro naufrago';
+      addFact(c, `encontro el campamento que fundo ${founder}`);
       remember(c, { kind: 'descubrimiento', text: 'encontro el campamento de los otros', salience: 4, emotion: 6 });
-      sim.emit('descubrimiento', `${c.name} encuentra el campamento de ${sim.world.buildings.shelter.founder || 'los otros'}`, 4);
+      sim.emit('descubrimiento', `${c.name} encuentra el campamento de ${founder === 'otro naufrago' ? 'los otros' : founder}`, 4);
     }
     if (c._lpx !== c.pos.x || c._lpy !== c.pos.y) { revealFog(c, sim.world, sim.weather, sim.tick); c._lpx = c.pos.x; c._lpy = c.pos.y; }
     if (c.needs.water >= 95 || c.needs.food >= 95 || c.needs.health < 50) sim.metrics.nearDeathTicks++;
@@ -270,6 +293,54 @@ export async function simTick(sim) {
 }
 
 // nadie se para encima de otro: solo se apartan los que estan quietos (empujar a quien camina crea rebote infinito)
+// depredadores y bestias: el mapa no es un zoo, muerde
+function predatorPass(sim) {
+  const w = sim.world;
+  const fx = shelterFx(w);
+  const ffx = fireFx(w);
+  // fortaleza: con el Torreón o La Copa en pie, las bestias no rondan el campamento
+  // la Gran Hoguera es llama divina: ahuyenta a las bestias de su luz
+  const campGuarded = (fx.torreon || fx.copa || ffx.gran) && w.campFounded;
+  for (const c of sim.citizens) {
+    if (!c.alive) continue;
+    const nearCamp = Math.hypot(c.pos.x - w.camp.x, c.pos.y - w.camp.y) < 8;
+    for (const a of w.animals) {
+      const d = Math.hypot(a.x - c.pos.x, a.y - c.pos.y);
+      if (d > 1.8) continue;
+      if (campGuarded && nearCamp && fx.torreon) {
+        // el Torreón no deja acercarse a las bestias: las espanta
+        a.tx = a.x + (a.x - c.pos.x) * 5; a.ty = a.y + (a.y - c.pos.y) * 5;
+        continue;
+      }
+      if (campGuarded && nearCamp && (a.type === 'boar' || a.type === 'snake')) {
+        a.tx = a.x + (a.x - c.pos.x) * 4; a.ty = a.y + (a.y - c.pos.y) * 4;
+        continue;
+      }
+      if ((a.lastAtk || 0) > sim.abs - 60) continue;
+      if (a.type === 'boar' && sim.rng.chance(0.35)) {
+        a.lastAtk = sim.abs;
+        const dmg = 10 + sim.rng.int(0, 14);
+        c.needs.health = clamp(c.needs.health - dmg, 0, 100);
+        addEmotion(c, 'miedo', 30, 'un jabali lo embistio');
+        remember(c, { kind: 'trauma', text: 'un jabali lo embistio y lo hirio', salience: 4, emotion: -10 });
+        c.visualSay = { text: '¡AAH! ¡el jabalí!', until: sim.abs + 4 };
+        sim.emit('ataque', `Un JABALI embiste a ${c.name} y lo hiere (-${dmg} salud)`, 4);
+        // el jabali sale espantado
+        a.tx = a.x + (a.x - c.pos.x) * 3; a.ty = a.y + (a.y - c.pos.y) * 3;
+      } else if (a.type === 'snake' && sim.rng.chance(0.25)) {
+        a.lastAtk = sim.abs;
+        const dmg = 6 + sim.rng.int(0, 8);
+        c.needs.health = clamp(c.needs.health - dmg, 0, 100);
+        c.sick = Math.max(c.sick || 0, 0.2);
+        addEmotion(c, 'miedo', 25, 'una serpiente lo mordio');
+        remember(c, { kind: 'trauma', text: 'una serpiente lo mordio', salience: 4, emotion: -8 });
+        c.visualSay = { text: '¡me mordió! ¡serpiente!', until: sim.abs + 4 };
+        sim.emit('ataque', `Una SERPIENTE muerde a ${c.name} (-${dmg} salud, veneno)`, 4);
+      }
+    }
+  }
+}
+
 function separateCitizens(sim) {
   const alive = sim.citizens.filter((c) => c.alive);
   const cell = new Map();
@@ -304,8 +375,15 @@ async function decideNext(sim, c) {
   c._urg = urg;
   if (urg.crisis) sim.metrics.crisisTicks++;
   const per = perceive(c, sim.world, sim.citizens, sim.weather, sim.tick);
-  per.shelterDone = sim.world.buildings.shelter.done;
-  per.altarDone = sim.world.buildings.altar.done;
+    per.shelterDone = anyShelterDone(sim.world);
+    per.shelterEnv = shelterEnv(sim.world, c);
+    per.fireEnv = fireEnv(sim.world, c);
+    per.fireDone = anyFireDone(sim.world);
+    per.fireWIP = inProgressFire(sim.world);
+    per.fireDesignable = unlockedFireDesigns(c).filter((d) => !firesListWorld(sim.world).some((s) => s.design === d.id));
+    per.altarDone = sim.world.buildings.altar.done;
+    per.altarObj = altarOf(sim.world);
+    per.altarDesignable = unlockedAltarDesigns(c);
   sim.perCache[c.id] = per;
   // registrar aguas conocidas (para poder VOLVER cuando la sed aprieta lejos)
   if (per.cleanWater && !c.knownWaters.some((k) => Math.hypot(k.x - per.cleanWater.x, k.y - per.cleanWater.y) < 3)) {
@@ -338,7 +416,7 @@ async function decideNext(sim, c) {
   c.lastDeliberationAbs = sim.abs;
 
   let menu0 = allowedActions(c, per, sim.world);
-  if (sim.weather === 'storm') menu0 = menu0.filter((m) => m.id !== 'fish'); // con tormenta no se pesca
+  if (sim.weather === 'storm') menu0 = menu0.filter((m) => m.id !== 'fish' && m.id !== 'sail_away'); // con tormenta no se pesca ni se zarpa
   // las emociones moldean el menu: el miedo no se va a explorar solo a lo oscuro
   const dom = dominantEmotion(c);
   let menuE = menu0;
@@ -349,11 +427,12 @@ async function decideNext(sim, c) {
     if (dom.emo === 'enojo' && dom.level > 65) menuE = menuE.filter((m) => m.id !== 'gift' && m.id !== 'teach');
   }
   // anti-atesoramiento: si ya acumulaste material de sobre y la obra no avanza, juntar mas sale del menu
-  const B = sim.world.buildings;
+  const shelterFinished = !inProgressShelter(sim.world);
   let menuH = menuE;
   if (!urg.crisis) {
-    if (!B.altar.done && c.inventory.stone >= 4) menuH = menuH.filter((m) => m.id !== 'gather_stone');
-    if (!B.shelter.done && c.inventory.wood >= 6) menuH = menuH.filter((m) => m.id !== 'gather_wood');
+    const altarObj = sim.world.buildings.altar;
+    if (!altarObj.done && altarObj.design && c.inventory.stone >= 4) menuH = menuH.filter((m) => m.id !== 'gather_stone');
+    if (!shelterFinished && c.inventory.wood >= 6) menuH = menuH.filter((m) => m.id !== 'gather_wood');
     // con comida de sobra, juntar mas sale del menu (se pudre de todos modos: la intuicion humana de "ya alcanza")
     const foodInv = c.inventory.berries + c.inventory.fish;
     if (foodInv >= 5) menuH = menuH.filter((m) => m.id !== 'forage' && m.id !== 'fish');
@@ -373,8 +452,20 @@ async function decideNext(sim, c) {
   const aloneH = Math.round((sim.abs - c.lastConvoAbs) / 12);
   const soledad = (aloneH >= 8 && per.others.length)
     ? `Hace ~${aloneH}h que no hablas con nadie y hay gente cerca (${per.others.map((o) => o.name).join(', ')}). La soledad te pesa; una charla (talk) te haria bien.` : null;
-  const vocacion = (c.traits.devoto >= 0.5 && !sim.world.buildings.altar.done && c.inventory.stone >= 1)
-    ? 'Sentis un llamado espiritual fuerte: levantar el altar del DIOS (build_altar) es tu mision.' : null;
+  const altarW = sim.world.buildings.altar;
+  // FIX vitalidad: solo nombrar la accion si de verdad esta en el menu (campamento fundado y conocido).
+  // Antes el prompt empujaba design_altar/build_altar aunque no fueran ejecutables -> el LLM obedecia,
+  // fallaba 3 veces y caia al fallback heuristico (el juego se sentia hardcodeado).
+  const altarActionable = sim.world.campFounded && c.knowsCamp;
+  const vocacion = (c.traits.devoto >= 0.5 && !altarW.done)
+    ? (altarW.design
+      ? (altarActionable
+        ? `Sentis un llamado espiritual fuerte: continuar la obra del altar de ${altarW.design} (build_altar) es tu mision.`
+        : `Sentis un llamado espiritual fuerte por el altar del DIOS, pero primero hay que asegurar el campamento.`)
+      : (altarActionable && unlockedAltarDesigns(c).length
+        ? 'Sentis un llamado espiritual fuerte: el altar del DIOS no tiene plano. Traza uno (design_altar) y consagralo.'
+        : `Sentis un llamado espiritual fuerte: el altar del DIOS espera un plano digno. Junta materiales y gana oficio para poder trazarlo.`))
+    : null;
   const curiosityLine = (c.curiosity > 55)
     ? `La curiosidad te corroe (${Math.round(c.curiosity)}/100): queda mapa sin ver y misterios sin resolver. Salir a explorar (explore) te haria bien.` : null;
   const mapLine = placesWords(c);
@@ -384,11 +475,17 @@ async function decideNext(sim, c) {
     .map(([k, v]) => `${k} ${Math.round(v)}/100`).join(', ');
   const emoLine = `ESTADO EMOCIONAL: estas ${emotionWords(c)}${c._lastEmoWhy ? ` — ultima causa: ${c._lastEmoWhy}` : ''}${emoDetail ? ` (${emoDetail})` : ''}`;
   const loveLine = c.inLoveWith ? ` (estas ENAMORADO de ${(sim.citizens.find((x) => x.id === c.inLoveWith) || {}).name || 'alguien'})` : '';
-  const leaderLine = sim.leaderId ? (sim.leaderId === c.id ? 'los demas te siguen como LIDER' : `${(sim.citizens.find((x) => x.id === sim.leaderId) || {}).name} es el lider del grupo`) : '';
+  // los demas solo existen para vos si los CONOCISTE (nada de telepatia)
+  const leaderObj = sim.leaderId ? sim.citizens.find((x) => x.id === sim.leaderId) : null;
+  const leaderLine = leaderObj && (leaderObj.id === c.id || c.met.has(leaderObj.id))
+    ? (leaderObj.id === c.id ? 'los demas te siguen como LIDER' : `${leaderObj.name} es el lider del grupo`) : '';
   const ctx = {
     c, menu, urg, per, rng: sim.rng, traits: c.traits, maslow: c.maslow,
     recentActions: c.actionLog.slice(-4).map((a) => `${a.id}${a.text ? ` (${a.text})` : ''}`),
-    islandRecent: sim.metrics.says.slice(-10),
+    // solo se escuchan las voces de quienes CONOCES (o la propia): nadie habla de extraños
+    islandRecent: (sim.metrics.sayLog || []).slice(-14)
+      .filter((s) => s.id === c.id || c.met.has(s.id))
+      .slice(-8).map((s) => `${s.name}: "${s.text}"`),
     soledad, vocacion, curiosityLine, chosenAction: null, mapLine, dangerLine,
     emotionLine: emoLine + loveLine, temperatureLine: c.temp < 36.2 ? 'estas TIRITANDO de frio' : c.temp > 37.8 ? 'el calor te agota' : null,
     goalLine: c.currentGoal ? `TU PROPOSITO ACTUAL: ${c.currentGoal}` : null, leaderLine,
@@ -464,6 +561,9 @@ async function decideNext(sim, c) {
   if (decision.say) {
     c.visualSay = { text: decision.say, until: sim.abs + 5 };
     sim.metrics.says.push(decision.say);
+    sim.metrics.sayLog = sim.metrics.sayLog || [];
+    sim.metrics.sayLog.push({ id: c.id, name: c.name, text: decision.say });
+    if (sim.metrics.sayLog.length > 40) sim.metrics.sayLog.shift();
     c.lastSays.push(decision.say);
     if (c.lastSays.length > 5) c.lastSays.shift();
     sim.emit('decision', `${c.name} decide: ${CATALOG[decision.action] ? CATALOG[decision.action].name : decision.action}. Dice: "${decision.say}"`, 2);
@@ -471,8 +571,6 @@ async function decideNext(sim, c) {
     sim.emit('decision', `${c.name} decide: ${CATALOG[decision.action] ? CATALOG[decision.action].name : decision.action}`, 1);
   }
 }
-
-function cfg0(sim) { return sim.cfg; }
 
 async function endOfDay(sim, final = false) {
   // clima del dia que viene: tirada ponderada, el humor del DIOS inclina la balanza
@@ -498,14 +596,20 @@ async function endOfDay(sim, final = false) {
   godDailyUpdate(sim);
   for (const c of sim.citizens) if (c.alive) decayHabits(c);
   // rebrote: la tierra fertil alimenta los arbustos; cerca del campamento la isla se agota (tarda mucho mas)
+  let resChanged = false;
   for (const b of sim.world.bushes) {
-    if (b.kind === 'whale') { if (sim.day - (b.startDay || sim.day) > 6) b.amount = Math.max(0, b.amount - 4); continue; }
-    const fert = sim.world.fertile[b.y * sim.world.w + b.x];
-    const nearCamp = Math.hypot(b.x - sim.world.camp.x, b.y - sim.world.camp.y) < 18;
-    if (nearCamp) {
-      if ((fert && sim.day % 6 === 0) || (!fert && sim.day % 10 === 0)) b.amount = Math.min(b.max ?? 2, b.amount + 1);
-    } else if ((fert && sim.day % 2 === 0) || (!fert && sim.day % 4 === 0)) b.amount = Math.min(b.max ?? 2, b.amount + 1);
+    const before = b.amount;
+    if (b.kind === 'whale') { if (sim.day - (b.startDay || sim.day) > 6) b.amount = Math.max(0, b.amount - 4); }
+    else {
+      const fert = sim.world.fertile[b.y * sim.world.w + b.x];
+      const nearCamp = Math.hypot(b.x - sim.world.camp.x, b.y - sim.world.camp.y) < 18;
+      if (nearCamp) {
+        if ((fert && sim.day % 6 === 0) || (!fert && sim.day % 10 === 0)) b.amount = Math.min(b.max ?? 2, b.amount + 1);
+      } else if ((fert && sim.day % 2 === 0) || (!fert && sim.day % 4 === 0)) b.amount = Math.min(b.max ?? 2, b.amount + 1);
+    }
+    if (b.amount !== before) resChanged = true;
   }
+  if (resChanged) sim.bumpRes();
   // conciencia del agotamiento: si cerca del campamento ya casi no queda nada, todos se enteran
   if (sim.world.campFounded) {
     const near = sim.world.bushes.filter((b) => Math.hypot(b.x - sim.world.camp.x, b.y - sim.world.camp.y) < 20);
@@ -523,12 +627,13 @@ async function endOfDay(sim, final = false) {
     for (const c of sim.citizens) {
       if (!c.alive) continue;
       const rotB = c.blessings.includes('pantry') ? Math.ceil(c.inventory.berries * 0.1) : Math.ceil(c.inventory.berries * 0.4);
-      const rotF = c.blessings.includes('smoker') ? 0 : c.inventory.fish;
+      const rotF = c.blessings.includes('smoker') ? 0 : (c.inventory.fish + (c.inventory.meat || 0));
       if (rotB > 0 || rotF > 0) {
-        c.inventory.berries -= rotB; c.inventory.fish -= rotF;
+        c.inventory.berries -= rotB;
+      const rotMeat = Math.min(c.inventory.meat || 0, rotF); c.inventory.meat -= rotMeat; c.inventory.fish -= (rotF - rotMeat);
         const parts = [];
         if (rotB) parts.push(`${rotB} bayas`);
-        if (rotF) parts.push(`${rotF} pescado${rotF > 1 ? 's' : ''} crudo${rotF > 1 ? 's' : ''}`);
+        if (rotF) parts.push(`${rotF} carne/pescado crudo`);
         sim.emit('clima', `la comida de ${c.name} se echo a perder durante la noche (${parts.join(' y ')})`, 2);
         remember(c, { kind: 'perdida', text: 'se le pudrio comida por no conservarla', salience: 2, emotion: -3 });
         if (!c.memory.facts.some((f) => f.includes('pudre'))) addFact(c, 'la comida se pudre rapido en la isla: comerla, regalarla o conservarla con ayuda del DIOS');
@@ -588,7 +693,7 @@ async function endOfDay(sim, final = false) {
 function checkAmbition(sim, c) {
   if (c.stats.ambitionDone) return;
   const others = sim.citizens.filter((o) => o.alive && o.id !== c.id);
-  if (c.ambitionKey === 'workshop' && sim.world.buildings.shelter.done && c.stats.crafts > 0) c.stats.ambitionDone = true;
+  if (c.ambitionKey === 'workshop' && anyShelterDone(sim.world) && c.stats.crafts > 0) c.stats.ambitionDone = true;
   if (c.ambitionKey === 'god_voice' && c.stats.godAnswered > 0) c.stats.ambitionDone = true;
   if (c.ambitionKey === 'leader' && others.filter((o) => ((o.memory.relations[c.id] || {}).score || 0) >= 20).length >= 2) c.stats.ambitionDone = true;
   // sueño a medida: se cumple cuando la comunidad lo reconoce (relaciones + etapa alta)
@@ -600,7 +705,11 @@ function die(sim, c) {
   const n = c.needs;
   const cause = n.water >= 90 ? 'sed' : n.food >= 90 ? 'hambre' : c.sick > 0 ? 'enfermedad' : 'colapso';
   c.alive = false; c.deathCause = cause; c.action = null;
-  if (c.inConversation) { const cv = c.inConversation; sim.conversations = sim.conversations.filter((x) => x !== cv); c.inConversation = null; }
+  if (c.inConversation) {
+    const cv = c.inConversation;
+    sim.conversations = sim.conversations.filter((x) => x !== cv);
+    cv.a.inConversation = null; cv.b.inConversation = null;
+  }
   sim.world.graves.push({ x: c.pos.x, y: c.pos.y, name: c.name, day: sim.day });
   sim.emit('muerte', `${c.name} MUERE de ${cause} en el dia ${sim.day}. Su mochila queda en el suelo; la isla guarda una tumba.`, 5);
   sim.metrics.deaths.push({ name: c.name, cause, day: sim.day });

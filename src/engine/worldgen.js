@@ -152,13 +152,17 @@ export function generateWorld(seed, opts = {}) {
     seed, w, h, biome, fertile, emap, waterfalls,
     camp,
     waterSources: [], bushes: [], trees: [], stones: [], fishZones: [], animals: [],
-    buildings: { shelter: { progress: 0, needed: 30, done: false, x: camp.x, y: camp.y - 1 },
-                 altar: { progress: 0, needed: 12, done: false, x: camp.x + 2, y: camp.y + 1 } },
+    buildings: { shelter: [],  // refugios del campamento: [{design, progress, needed, done, x, y, founder}]
+                 founder: null,  // quien fundo el campamento
+                 fire: [],  // fogatas alrededor del fuego: [{design, progress, needed, done, x, y, founder}]
+                 boats: [],  // barcos en la playa: [{design, progress, needed, done, sailed, x, y, founder}]
+                 altar: { design: null, progress: 0, needed: 12, done: false, x: camp.x + 2, y: camp.y + 1 } },
     graves: [],
     animalRng: mulberry32((seed >>> 0) ^ 0x51F15EED),
     wonders: [],
     knownUnion: new Uint8Array(w * h),  // niebla de guerra del espectador (union de lo visto por todos)
     newDiscovered: [],                  // tiles descubiertos desde el ultimo snapshot
+    resVersion: 0,                      // sube cada vez que cambian los recursos (arbustos/arboles/piedras)
   };
   // desembocaduras: rios que llegan a la playa (donde varan los naufragos)
   world.riverMouths = [];
