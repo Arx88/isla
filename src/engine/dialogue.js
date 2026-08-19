@@ -103,10 +103,12 @@ function endConversation(sim, convo, note) {
   convo.a.lastConvoAbs = sim.abs; convo.b.lastConvoAbs = sim.abs;
   convo.a.stats.convos++; convo.b.stats.convos++;
   // registro de conversaciones para el expediente de cada uno
-  const topic = convo.lines.length ? convo.lines[convo.lines.length - 1].text.slice(0, 40) : 'cosas de la isla';
+  const topic = convo.lines.length ? convo.lines[convo.lines.length - 1].text.slice(0, 60) : 'cosas de la isla';
+  const opening = convo.lines.length ? convo.lines[0].text.slice(0, 60) : '';
+  const nlines = convo.lines.length;
   for (const [self, other] of [[convo.a, convo.b], [convo.b, convo.a]]) {
-    self.convoLog.push({ with: other.name, day: sim.day, topic });
-    if (self.convoLog.length > 8) self.convoLog.shift();
+    self.convoLog.push({ with: other.name, day: sim.day, topic, opening, nlines });
+    if (self.convoLog.length > 14) self.convoLog.shift();
   }
   // transmision de conocimiento: el que sabe donde esta el campamento, se lo cuenta al otro
   const w = sim.world;

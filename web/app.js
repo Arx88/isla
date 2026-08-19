@@ -1,5 +1,6 @@
 // app.js — ISLA en vivo: SSE + renderer por chunks + clima + fauna + estados (cero dependencias)
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const canvas = $('world'), ctx = canvas.getContext('2d');
 const mini = $('minimap'), mctx = mini.getContext('2d');
 if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -232,8 +233,13 @@ function frame(now) {
   const inView = (x, y, m = 2) => x * z + cx > -m * z && x * z + cx < W + m * z && y * z + cy > -m * z && y * z + cy < H + m * z;
 
   // agua viva por-pixel (causticas, corriente, profundidad) + oleaje en bordes
-  drawWaterFX(now);
+  drawWaterFX(now, z);
   let waterDraws = 0;
+  // espuma pegada al borde del tile: grosores/offsets proporcionales a z (no píxeles fijos)
+  // y la onda jamas sale del tile (clamped): si no, se derrama sobre la tierra en las esquinas
+  const fw1 = Math.max(1, z * 0.09), fw2 = Math.max(1, z * 0.06), finset = Math.max(0.5, z * 0.02);
+  const flen = Math.max(fw1, z - finset * 2 - z * 0.08);
+  const cl = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
   for (const e of coastEdges) {
     if (!inView(e.x, e.y) || waterDraws > 700) continue;
     waterDraws++;
@@ -242,10 +248,14 @@ function frame(now) {
     const off = Math.sin(phase) * z * 0.18, off2 = Math.cos(phase * 0.6) * z * 0.1;
     ctx.fillStyle = 'rgba(235,248,252,.85)';
     for (const ed of e.edges) {
-      if (ed === 'N') { ctx.fillRect(px + 2 + off, py, z - 5, 2.5); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + 2 - off, py + 3 + off2, z - 5, 2); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
-      if (ed === 'S') { ctx.fillRect(px + 2 - off, py + z - 2.5, z - 5, 2.5); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + 2 + off, py + z - 5 - off2, z - 5, 2); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
-      if (ed === 'W') { ctx.fillRect(px, py + 2 + off, 2.5, z - 5); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + 3 + off2, py + 2 - off, 2, z - 5); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
-      if (ed === 'E') { ctx.fillRect(px + z - 2.5, py + 2 - off, 2.5, z - 5); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + z - 5 - off2, py + 2 + off, 2, z - 5); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
+      if (ed === 'N') { const x0 = cl(px + finset + off, px, px + z - flen), x1 = cl(px + finset - off, px, px + z - flen);
+        ctx.fillRect(x0, py, flen, fw1); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(x1, py + finset + off2, flen, fw2); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
+      if (ed === 'S') { const x0 = cl(px + finset - off, px, px + z - flen), x1 = cl(px + finset + off, px, px + z - flen);
+        ctx.fillRect(x0, py + z - fw1, flen, fw1); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(x1, py + z - finset - fw2 - off2, flen, fw2); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
+      if (ed === 'W') { const y0 = cl(py + finset + off, py, py + z - flen), y1 = cl(py + finset - off, py, py + z - flen);
+        ctx.fillRect(px, y0, fw1, flen); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + finset + off2, y1, fw2, flen); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
+      if (ed === 'E') { const y0 = cl(py + finset - off, py, py + z - flen), y1 = cl(py + finset + off, py, py + z - flen);
+        ctx.fillRect(px + z - fw1, y0, fw1, flen); ctx.fillStyle = 'rgba(190,225,240,.4)'; ctx.fillRect(px + z - finset - fw2 - off2, y1, fw2, flen); ctx.fillStyle = 'rgba(235,248,252,.85)'; }
     }
   }
   // destellos de sol escasos: el cuerpo del agua ya lo da el overlay por-pixel
@@ -321,6 +331,28 @@ function frame(now) {
 
   // ===== NIEBLA DE GUERRA del espectador: bruma viva sobre lo inexplorado =====
   drawFog(now, z, cx, cy);
+
+  // ===== FLORES del VIVERO: 10 especies animadas en praderas y campos =====
+  if (window.NATURE && window.NATURE.paint) {
+    const x0f = Math.floor((cam.x - W / 2 / z)) - 1, x1f = Math.ceil((cam.x + W / 2 / z)) + 1;
+    const y0f = Math.floor((cam.y - H / 2 / z)) - 1, y1f = Math.ceil((cam.y + H / 2 / z)) + 1;
+    for (let ty = Math.max(0, y0f); ty < Math.min(map.h, y1f); ty++) {
+      for (let tx = Math.max(0, x0f); tx < Math.min(map.w, x1f); tx++) {
+        const b = map.biome[ty * map.w + tx];
+        if (!(b === BIOME.MEADOW || b === BIOME.GRASS)) continue;
+        const hv = hash2(tx, ty, 43);
+        if (hv < 0.3 && fogSet.has(ty * map.w + tx)) {
+          const k = Math.floor(hash2(tx, ty, 44) * 10) % window.NATURE.FLOWERS.length;
+          const fx = tx * z + cx + hash2(tx, ty, 45) * z * 0.7;
+          const fy = ty * z + cy + hash2(tx, ty, 46) * z * 0.5;
+          const o = window.NATURE.painter(ctx, z * 0.5);
+          o.t = now / 1000;
+          o.seed = tx * 131 + ty * 97;
+          window.NATURE.paint.flower[window.NATURE.FLOWERS[k].id](o, fx, fy + z * 0.9, z * 0.5);
+        }
+      }
+    }
+  }
 
   // ===== dibujar con ORDEN POR PROFUNDIDAD (nadie camina sobre arboles) =====
   zG = z;
@@ -437,10 +469,35 @@ function leafCluster(cx0, cy0, r, pal, sway, v) {
   PP(cx0 + r * .3, cy0 - r * .95, r * .2, r * .2, pal[3]);
   PP(cx0 - r * .55, cy0 - r * 1.3, r * .2, r * .2, pal[3]);
 }
+function appTreeKind(b, v) {
+  if (v < 0.045 && b !== BIOME.SAND && b !== BIOME.SNOW) return 'muerto';
+  if (b === BIOME.SAND) return 'palmera';
+  if (b === BIOME.DRY) return v > 0.72 ? 'baobab' : v > 0.55 ? 'alamo' : v > 0.3 ? 'muerto' : 'baobab';
+  if (b === BIOME.SWAMP) return v > 0.5 ? 'mangle' : 'roble';
+  if (b === BIOME.JUNGLE) return v > 0.62 ? 'selva' : v > 0.34 ? 'banyan' : 'frutal';
+  if (b === BIOME.PINE) return v > 0.2 ? 'pino' : 'abedul';
+  if (b === BIOME.MEADOW || b === BIOME.GRASS) return v > 0.86 ? 'cerezo' : v > 0.72 ? 'alamo' : v > 0.5 ? 'sauce' : v > 0.25 ? 'roble' : 'abedul';
+  if (b === BIOME.FOREST) return v > 0.82 ? 'cerezo' : v > 0.6 ? 'sauce' : v > 0.46 ? 'alamo' : v > 0.2 ? 'roble' : 'pino';
+  if (b === BIOME.SNOW) return 'pino';
+  return 'roble';
+}
+
 function drawTree(tr, z, cx, cy, now) {
   const x = tr.x * z + cx, y = tr.y * z + cy;
   const b = B(tr.x, tr.y);
   const v = hash2(tr.x * 3.7, tr.y * 7.3, 5);
+  const NAT = window.NATURE;
+  if (NAT && NAT.paint) { // especies del VIVERO (web/nature-designs.js)
+    const kind = appTreeKind(b, v);
+    const paint = NAT.paint.tree[kind];
+    if (paint) {
+      const o = NAT.painter(ctx, z * 1.2);
+      o.t = now / 1000;
+      o.seed = tr.x * 131 + tr.y * 97;
+      paint(o, x + z / 2, y + z * 0.85, z * 1.2);
+      return;
+    }
+  }
   const s = 0.85 + v * 0.4;
   const pal = TREE_GREENS[(v * 4) | 0];
   const lean = (hash2(tr.x, tr.y, 9) - 0.5) * z * 0.12;
@@ -497,8 +554,7 @@ function drawTree(tr, z, cx, cy, now) {
   }
 }
 function drawBush(bsh, z, cx, cy, now) {
-  const x = bsh.x * z + cx, y = bsh.y * z + cy;
-  const v = hash2(bsh.x * 5, bsh.y * 9, 3);
+  const x = bsh.x * z + cx, y = bsh.y * z + cy;  const v = hash2(bsh.x * 5, bsh.y * 9, 3);
   const s = 0.8 + v * 0.45;
   const sway = Math.sin(now / 1100 + bsh.x) * z * 0.02;
   ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * .85, z * .34 * s, z * .11, 0, 0, 7); ctx.fill();
@@ -517,6 +573,18 @@ function drawBush(bsh, z, cx, cy, now) {
 function drawStone(st, z, cx, cy, now) {
   const x = st.x * z + cx, y = st.y * z + cy;
   const v = hash2(st.x * 7, st.y * 3, 4);
+  const NAT = window.NATURE;
+  if (NAT && NAT.paint) { // 10 variantes del VIVERO (web/nature-designs.js)
+    const list = ['gris', 'gris', 'musgo', 'musgo', 'rio', 'obsid', 'lava', 'cuarzo', 'menhir', 'dolmen', 'ambar', 'geoda'];
+    const paint = NAT.paint.stone[list[Math.floor(hash2(st.x * 11, st.y * 5, 6) * list.length) % list.length]];
+    if (paint) {
+      const o = NAT.painter(ctx, z);
+      o.t = now / 1000;
+      o.seed = st.x * 131 + st.y * 97;
+      paint(o, x + z / 2, y + z * 0.85, z);
+      return;
+    }
+  }
   ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.ellipse(x + z / 2, y + z * .85, z * .38, z * .12, 0, 0, 7); ctx.fill();
   if (v > 0.5) { // redonda
     ctx.fillStyle = '#78716a'; ctx.fillRect(x + z * .08, y + z * .3, z * .8, z * .55);
@@ -1026,8 +1094,8 @@ let inViewFn = () => false;
 // overlay a resolucion nativa baja: cada pixel = fpx px de pantalla; shimmer con ruido que se desplaza
 const fxCv = document.createElement('canvas');
 const fxg = fxCv.getContext('2d');
-function drawWaterFX(now) {
-  const z = zG;
+function drawWaterFX(now, zNow) {
+  const z = zNow != null ? zNow : zG; // zoom del frame actual: si llega el del frame pasado, el overlay desancla al hacer zoom
   const fpx = Math.max(2, Math.round(z / 8)); // px de pantalla por pixel del overlay
   let fw = Math.ceil(canvas.width / fpx), fh = Math.ceil(canvas.height / fpx);
   const cap = 420 * 260;
@@ -1041,17 +1109,29 @@ function drawWaterFX(now) {
   const time = now / 1000;
   const HW = canvas.width / 2 / z, HH = canvas.height / 2 / z;
   const step = fps / z; // tiles por pixel del overlay
+  const x0base = cam.x - HW, y0base = cam.y - HH;
+  const eps = 1e-4;
   for (let j = 0; j < fh; j++) {
-    const wy = cam.y - HH + (j + 0.5) * step;
+    const wy0 = y0base + j * step; // borde superior del bloque (en tiles)
+    const wy = wy0 + 0.5 * step;
     const ty = wy | 0;
     if (ty < 0 || ty >= map.h) continue;
+    const ty0 = wy0 | 0, ty1 = (wy0 + step - eps) | 0;
+    if (ty0 < 0 || ty1 >= map.h) continue;
     for (let i = 0; i < fw; i++) {
-      const wx = cam.x - HW + (i + 0.5) * step;
+      const wx0 = x0base + i * step;
+      const tx0 = wx0 | 0, tx1 = (wx0 + step - eps) | 0;
+      if (tx0 < 0 || tx1 >= map.w) continue;
+      const wx = wx0 + 0.5 * step;
       const tx = wx | 0;
-      if (tx < 0 || tx >= map.w) continue;
       const bi = ty * map.w + tx;
       const b = map.biome[bi];
       if (b > 2 && b !== 9 && b !== 14) continue;
+      // ANCLAJE: cada bloque del overlay cubre ~step tiles; si alguna esquina cae en
+      // tierra, al escalarlo se derrama sobre la costa. Solo se pinta entero dentro del agua.
+      const isWo = (b2) => b2 <= 2 || b2 === 9 || b2 === 14;
+      if (!(isWo(map.biome[ty0 * map.w + tx0]) && isWo(map.biome[ty0 * map.w + tx1])
+        && isWo(map.biome[ty1 * map.w + tx0]) && isWo(map.biome[ty1 * map.w + tx1]))) continue;
       const nx = wx * 16, ny = wy * 16;
       let f, alpha;
       if (b === 14) { // rio: el ruido se arrastra con la corriente
@@ -1372,7 +1452,9 @@ function selectCitizen(id) {
   // ===== TAB HISTORIA =====
   $('ccConvos').innerHTML = (c.convoLog || []).length
     ? c.convoLog.slice().reverse().map((x) =>
-      '<div class="convo-row"><div class="meta">día <b>' + x.day + '</b> · con <b>' + x.with + '</b></div><div class="quote">“' + x.topic + '”</div></div>').join('')
+      '<div class="convo-row"><div class="meta">día <b>' + x.day + '</b> · con <b>' + esc(x.with) + '</b>'
+      + (x.nlines ? ' · ' + x.nlines + ' líneas' : '') + '</div><div class="quote">“' + esc(x.topic) + '”</div>'
+      + (x.opening ? '<div class="quote" style="opacity:.7">“' + esc(x.opening) + '”</div>' : '') + '</div>').join('')
     : '<div style="font-size:12px;color:var(--ink2)">no habló con nadie todavía</div>';
   $('ccMem').innerHTML = (c.lastMemories || []).length
     ? c.lastMemories.map((m) => '<div>' + m + '</div>').join('')

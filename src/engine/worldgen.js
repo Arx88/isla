@@ -189,8 +189,17 @@ export function generateWorld(seed, opts = {}) {
     else if (b === BIOME.FOREST && r > 0.34) addRes(world.trees, x, y, { amount: 3 });
     else if (b === BIOME.JUNGLE && r > 0.40) addRes(world.trees, x, y, { amount: 4 });
     else if (b === BIOME.PINE && r > 0.42) addRes(world.trees, x, y, { amount: 3 });
-    else if ((b === BIOME.ROCK || b === BIOME.PINE) && r > 0.93) addRes(world.stones, x, y, { amount: 4 });
-    else if (b === BIOME.DRY && r > 0.965) addRes(world.stones, x, y, { amount: 3 });
+    else if (b === BIOME.SAND && r > 0.87) addRes(world.trees, x, y, { amount: 3 });
+    else if (b === BIOME.SWAMP && r > 0.6) addRes(world.trees, x, y, { amount: 3 });
+    else if (b === BIOME.DRY && r > 0.78) addRes(world.trees, x, y, { amount: 2 });
+    else if ((b === BIOME.MEADOW || b === BIOME.GRASS) && r > 0.9) addRes(world.trees, x, y, { amount: 3 });
+    // piedras: sorteo independiente (rs), no compiten con arbustos/árboles
+    const rs = hash2(x, y, seed + 31);
+    if ((b === BIOME.ROCK || b === BIOME.PINE) && rs > 0.88) addRes(world.stones, x, y, { amount: 4 });
+    else if (b === BIOME.DRY && rs > 0.9) addRes(world.stones, x, y, { amount: 3 });
+    else if ((b === BIOME.MEADOW || b === BIOME.GRASS || b === BIOME.FOREST || b === BIOME.SNOW) && rs > 0.95) addRes(world.stones, x, y, { amount: 3 });
+    else if (b === BIOME.JUNGLE && rs > 0.96) addRes(world.stones, x, y, { amount: 3 });
+    else if (b === BIOME.SWAMP && rs > 0.96) addRes(world.stones, x, y, { amount: 3 });
   }
 
   // garantias cerca del campamento

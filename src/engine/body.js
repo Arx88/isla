@@ -94,6 +94,7 @@ export function bodyWords(c) {
     `Energia: ${wordFor(WORDS.energy, 100 - c.needs.energy)}`,
     `Salud: ${wordFor(WORDS.health, c.needs.health)}`,
     `Animo: ${c.mood > 65 ? 'de buen humor' : c.mood > 40 ? 'apagado' : 'por el piso'}`,
+    c.attrs ? `Tu cuerpo: ${c.attrs.fuerza >= 8 ? 'sos fuerte, cargas y talas mas que la mayoria' : c.attrs.fuerza <= 4 ? 'tus brazos son flojos: cargar y talar te cuesta mas' : 'fuerza normal'}; ${c.attrs.agilidad >= 8 ? 'sos agil, te moves rapido' : c.attrs.agilidad <= 4 ? 'sos torpe de movimientos' : 'agilidad normal'}; ${c.attrs.inteligencia >= 8 ? 'aprendes rapido' : c.attrs.inteligencia <= 4 ? 'aprendes lento' : 'aprendes a tu ritmo'}` : null,
     c.sick > 0 ? 'Sientes el estomago revuelto y la frente caliente (estas enfermo: la fiebre te deshidrata)' : null,
     (c.wet || 0) > 65 ? 'Tu ropa esta EMPAPADA y pesa: si dormis asi te vas a enfermar' : (c.wet || 0) > 30 ? 'Tu ropa esta humeda' : null,
     inv.length ? `Llevas: ${inv.join(', ')}${c.inventory.berries + c.inventory.fish > 4 ? ' (ojo: la comida se pudre rapido; comerla, regalarla o conservarla)' : ''}` : 'No llevas nada',

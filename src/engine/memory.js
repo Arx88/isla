@@ -61,7 +61,11 @@ export function placesWords(c) {
 export function remember(c, { kind, text, salience = 1, emotion = 0 }) {
   c.memory.recent.push({ day: c._simDay, tick: c._simTick, kind, text, salience });
   if (c.memory.recent.length > 16) c.memory.recent.shift();
-  if (emotion) c.mood = clamp(c.mood + emotion, 0, 100);
+  if (emotion) {
+    c.mood = clamp(c.mood + emotion, 0, 100);
+    // las vivencias dejan un sedimento en el animo base: sesgo lento que se disipa con los dias
+    c.moodBias = clamp((c.moodBias || 0) + emotion * 0.15, -12, 12);
+  }
 }
 
 export function relOf(c, otherId) {

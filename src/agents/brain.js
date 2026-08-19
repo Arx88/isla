@@ -5,6 +5,19 @@ export function hhmm(tick) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+// Recorta a `max` caracteres cortando SIEMPRE en limite de palabra o puntuacion,
+// nunca a mitad de palabra (antes un slice(0,90) dejaba "...parar un ra"). Limpia comillas.
+// No decide nada: solo evita que el codigo mutile lo que el LLM ya escribio.
+function clip(text, max) {
+  if (text == null) return null;
+  let s = String(text).replace(/"/g, '').trim();
+  if (!s) return null;
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const b = Math.max(cut.lastIndexOf(' '), cut.lastIndexOf(','), cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'), cut.lastIndexOf(';'));
+  return (b > Math.floor(max * 0.4) ? cut.slice(0, b) : cut).trim();
+}
+
 export function buildDecisionMessages(ctx) {
   const { c, bodyWords, perceptionWords, memoryWords, menu, urg, time, weather, maslowName, recentActions, skillWords } = ctx;
   const menuTxt = menu.map((m) => `- ${m.id}: ${m.desc}`).join('\n');
@@ -77,11 +90,9 @@ export function parseDecision(text, menu) {
     action = hit || null;
   }
   if (!action) return null;
-  let say = j.say ? String(j.say).trim() : null;
-  if (say && (say.length > 90 || say.includes('"'))) say = say.slice(0, 90).replace(/"/g, '');
-  let think = j.think ? String(j.think).trim().slice(0, 90) : null;
-  if (think) think = think.replace(/"/g, '');
-  const goal = j.goal ? String(j.goal).trim().slice(0, 90) : null;
+  const say = clip(j.say, 90);
+  const think = clip(j.think, 90);
+  const goal = clip(j.goal, 90);
   return { action, target: j.target && j.target !== 'null' ? String(j.target).trim() : null, say, think, goal };
 }
 
@@ -128,10 +139,10 @@ export function parsePlea(text) {
   if (!j) return null;
   const valid = ['berries', 'wood', 'stone', null, undefined, 'null'];
   return {
-    wish: j.wish ? String(j.wish).slice(0, 80) : 'ayuda',
+    wish: clip(j.wish, 80) || 'ayuda',
     offerResource: valid.includes(j.offerResource) ? (j.offerResource || null) : null,
     offerQty: Math.max(0, Math.min(5, parseInt(j.offerQty) || 0)),
-    say: j.say ? String(j.say).slice(0, 120) : null,
+    say: clip(j.say, 120),
   };
 }
 
@@ -155,7 +166,7 @@ export function parseGod(text) {
   const j = extractJson(text);
   if (!j) return null;
   const dec = ['grant', 'demand_more', 'deny', 'silence'].includes(j.decision) ? j.decision : 'demand_more';
-  return { decision: dec, recipeId: j.recipeId ? String(j.recipeId) : null, reply: j.reply ? String(j.reply).slice(0, 160) : null };
+  return { decision: dec, recipeId: j.recipeId ? String(j.recipeId) : null, reply: clip(j.reply, 160) };
 }
 
 // extrae el primer objeto JSON balanceado de un texto (por si el modelo agrego prosa)

@@ -29,6 +29,9 @@
     <div class="gm-dev" title="Devoción: la moneda del DIOS. Se gasta en milagros y catástrofes; se gana respondiendo plegarias.">
       <span class="gm-devicon">✦</span><b id="gmDevotion">60</b>
     </div>
+    <div class="gm-dev gm-stock" title="Común del campamento: madera y piedra que los aldeanos usan para las obras que ordenas.">
+      <span id="gmStock">🪵 60 · 🪨 40</span>
+    </div>
     <div class="gm-mood" title="Humor del DIOS: a más humor, más baratas las gracias">
       <span id="gmMoodFace">🙂</span>
       <input id="gmMood" type="range" min="0" max="100" value="55">
@@ -52,10 +55,11 @@
   <!-- toolbar de la mano divina -->
   <nav class="gm-tools" id="gmTools">
     <button class="gm-tool active" data-tool="hand" data-tip="MANO DIVINA: arrastra aldeanos y animales, arrojálos donde quieras (el mar no perdona)">✋</button>
-    <button class="gm-tool" data-tool="animal" data-tip="SEMBRAR FAUNA (ciervo · conejo · jabalí · cabra · serpiente)">🐗</button>
-    <button class="gm-tool" data-tool="plant" data-tip="SEMBRAR FLORA (arbusto de bayas · árbol · piedra)">🌱</button>
-    <button class="gm-tool" data-tool="cata" data-tip="CATÁSTROFES (rayo · tormenta · calor · peste · meteoro)">☄️</button>
-    <button class="gm-tool" data-tool="miracle" data-tip="MILAGROS (lluvia · ballena varada · viento de fruta · sanar)">✨</button>
+    <button class="gm-tool" data-tool="animal" data-tip="SEMBRAR FAUNA (ciervo · conejo · jabalí · cabra · serpiente · gaviota · tortuga)">🐗</button>
+    <button class="gm-tool" data-tool="plant" data-tip="SEMBRAR FLORA (arbusto de bayas · árbol · piedra · flores)">🌱</button>
+    <button class="gm-tool" data-tool="build" data-tip="ORDENAR UNA OBRA: refugios, fogatas, altares y barcos — los aldeanos la construyen con la madera y piedra comunales">🔨</button>
+    <button class="gm-tool" data-tool="cata" data-tip="CATÁSTROFES (rayo · meteoro · tormenta · calor · peste)">☄️</button>
+    <button class="gm-tool" data-tool="miracle" data-tip="MILAGROS (lluvia · vertiente de agua dulce · ballena varada · viento de fruta · sanar · revivir)">✨</button>
   </nav>
 
   <!-- submenú de variantes de la herramienta activa -->
@@ -130,6 +134,7 @@ window.onerror = (msg, src, line, col, err) => {
 <script src="/campfire-designs.js"></script>
 <script src="/altar-designs.js"></script>
 <script src="/ship-designs.js"></script>
+<script src="/nature-designs.js"></script>
 <script src="/god-mode.js"></script>
 </body>
 </html>

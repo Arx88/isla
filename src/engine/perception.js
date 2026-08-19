@@ -84,7 +84,7 @@ export function perceive(c, world, citizens, weather = 'clear', tick = 100) {
       sleeping: !!(o.action && o.action.id === 'sleep'),
       ref: o,
     }))
-    .filter((o) => o.dist <= RADIUS + 3);
+    .filter((o) => o.dist <= RADIUS + 8);
   const aliveOthers = citizens.filter((o) => o.alive && o.id !== c.id).length;
   // senales visibles en el mundo: huellas, humo, ballena, fruta (solo las que aun no descubrio)
   const wonders = (world.wonders || [])
@@ -192,7 +192,7 @@ function doingWords(id) {
     design_fire: 'trazando el plano de una fogata',
     build_fire: 'armando la fogata',
     design_altar: 'trazando el plano del altar',
-    build_altar: 'levantando el altar', pray: 'rezando', talk: 'hablando con alguien',
+    build_altar: 'levantando el altar', pray: 'rezando', talk: 'hablando con alguien', seek_company: 'buscando compania',
     explore: 'explorando', rest: 'descansando', sleep: 'durmiendo', gift: 'ofreciendo algo', craft: 'fabricando algo',
     design_boat: 'trazando el plano de un barco', build_boat: 'trabajando en el barco', sail_away: 'despidiéndose y subiendo a bordo',
   };

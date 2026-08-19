@@ -115,7 +115,7 @@ export function createEvents() {
       }
 
       // senales de vida: huellas frescas de OTRA PERSONA apuntan hacia los que aun no conoces
-      if (sim.day >= 2 && sim.abs - state.lastSignal > 420 && sim.rng.chance(0.01)) {
+      if (sim.abs - state.lastSignal > 100 && sim.rng.chance(0.06)) {
         const w = sim.world;
         let someoneGotSignal = false;
         for (const c of alive) {

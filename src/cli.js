@@ -5,6 +5,7 @@ import { runSim } from './engine/sim.js';
 import { renderChronicle } from './engine/chronicle.js';
 import { createOllama } from './agents/ollama.js';
 import { createHeuristic } from './agents/heuristic.js';
+import { buildChainFromEnv } from './agents/fallback.js';
 
 const args = process.argv.slice(2);
 const arg = (name, def) => {
@@ -45,7 +46,9 @@ const CITIZENS = [
 
 const provider = cfg.providerName === 'ollama'
   ? createOllama({ model: cfg.model })
-  : createHeuristic();
+  : cfg.providerName === 'chain'
+    ? buildChainFromEnv()
+    : createHeuristic();
 
 const t0 = Date.now();
 console.log(`ISLA F0 — dias=${cfg.days} seed=${cfg.seed} provider=${provider.name}${provider.name === 'ollama' ? ':' + cfg.model : ''}`);

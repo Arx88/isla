@@ -7,6 +7,7 @@ import { createSim, simTick } from './src/engine/sim.js';
 import { createOllama } from './src/agents/ollama.js';
 import { createHeuristic } from './src/agents/heuristic.js';
 import { createOpenAI } from './src/agents/openai.js';
+import { buildChainFromEnv } from './src/agents/fallback.js';
 import { TICKS_PER_DAY } from './src/engine/body.js';
 
 const args = process.argv.slice(2);
@@ -88,6 +89,7 @@ let lastResV = -1;            // ultima version de recursos enviada a los client
 function providerFor(name) {
   if (name === 'ollama') return createOllama({ model: DEFAULT_MODEL });
   if (name === 'openai') return createOpenAI({ model: DEFAULT_MODEL, baseUrl: OPENAI_BASE, apiKey: OPENAI_KEY });
+  if (name === 'chain') return buildChainFromEnv();
   return createHeuristic();
 }
 
@@ -108,8 +110,8 @@ function snapshot(full = false) {
       attrs: c.attrs || null, temp: Math.round((c.temp || 36.8) * 10) / 10, goal: c.currentGoal || null,
       inLoveWith: c.inLoveWith || null, curiosity: Math.round(c.curiosity || 0),
       thoughts: (c.thoughtLog || []).slice(-3).map((t) => t.text),
-      thoughtLog: (c.thoughtLog || []).slice(-8).map((t) => ({ d: t.day, t: t.tick, text: t.text })),
-      convoLog: (c.convoLog || []).slice(-6).map((x) => ({ with: x.with, day: x.day, topic: x.topic })),
+      thoughtLog: (c.thoughtLog || []).slice(-14).map((t) => ({ d: t.day, t: t.tick, text: t.text })),
+      convoLog: (c.convoLog || []).slice(-12).map((x) => ({ with: x.with, day: x.day, topic: x.topic, opening: x.opening || '', nlines: x.nlines || 0 })),
       relationsDetail: Object.fromEntries(Object.entries(c.memory.relations).slice(0, 9).map(([id, r]) => [id, { s: Math.round(r.score), e: r.epithet, ev: (r.events || []).slice(-3) }])),
       places: Object.values(c.memory.places || {}).slice(0, 8).map((p) => ({ x: p.x, y: p.y, k: p.k, note: p.note })),
       met: c.met ? [...c.met] : [],
@@ -124,7 +126,7 @@ function snapshot(full = false) {
     buildings: { shelter: w.buildings.shelter, fire: w.buildings.fire || [], altar: w.buildings.altar, founder: w.buildings.founder || null, boats: w.buildings.boats || [] },
     // los recursos se envian solo cuando cambian (versionado por sim.bumpRes)
     fogNew: w.newDiscovered ? w.newDiscovered.splice(0) : [],
-    events: sim.events.slice(-40).map((e, i) => ({ ...e, key: sim.events.length - Math.min(40, sim.events.length) + i })),
+    events: sim.events.slice(-60).map((e, i) => ({ ...e, key: sim.events.length - Math.min(60, sim.events.length) + i })),
   };
   const resV = w.resVersion || 0;
   if (full || resV !== lastResV) {
@@ -199,11 +201,11 @@ const server = http.createServer(async (req, res) => {
     const staticPath = url.pathname === '/' || url.pathname === '/index.html' ? '/index.html' : url.pathname;
     if (/^\/[a-z0-9._-]+\.(html|js|css|png|ico)$/i.test(staticPath)) {
       const file = path.resolve('web', staticPath.slice(1));
-      if (file.startsWith(path.resolve('web')) && fs.existsSync(file)) {
-        res.writeHead(200, { 'content-type': (MIME[path.extname(staticPath)] || 'application/octet-stream') + '; charset=utf-8' });
-        res.end(fs.readFileSync(file));
-        return;
-      }
+        if (file.startsWith(path.resolve('web')) && fs.existsSync(file)) {
+          res.writeHead(200, { 'content-type': (MIME[path.extname(staticPath)] || 'application/octet-stream') + '; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(fs.readFileSync(file));
+          return;
+        }
     }
     if (url.pathname === '/api/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });

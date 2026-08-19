@@ -168,7 +168,7 @@ export function createSim(cfg) {
         addEmotion(x, 'celos', 22, `${beloved.name} con ${rival.name}`);
         adjustRel(x, partner, -8, `celos: ${beloved.name} con ${rival.name}`);
         x.thoughtLog.push({ day: this.day, tick: this.tick, text: `por que ${beloved.name} pasa tiempo con ${rival.name}...` });
-        if (x.thoughtLog.length > 6) x.thoughtLog.shift();
+        if (x.thoughtLog.length > 20) x.thoughtLog.shift();
         this.emit('vinculo', `${x.name} mira de reojo a ${beloved.name} y ${rival.name} juntos`, 2);
       }
     },
@@ -570,7 +570,7 @@ async function decideNext(sim, c) {
   if (decision.think) {
     c.visualThink = { text: decision.think, until: sim.abs + 10 };
     c.thoughtLog.push({ day: sim.day, tick: sim.tick, text: decision.think });
-    if (c.thoughtLog.length > 12) c.thoughtLog.shift();
+    if (c.thoughtLog.length > 20) c.thoughtLog.shift();
   }
   // meta personal declarada por el propio agente (dura 2 dias)
   if (decision.goal && String(decision.goal).length < 90) { c.currentGoal = String(decision.goal); c.currentGoalDay = sim.day; }
@@ -618,6 +618,8 @@ async function endOfDay(sim, final = false) {
   }
   godDailyUpdate(sim);
   for (const c of sim.citizens) if (c.alive) decayHabits(c);
+  // el sedimento emocional se disipa con el sueno: cada amanecer el sesgo de animo se atenúa
+  for (const c of sim.citizens) if (c.alive) c.moodBias = (c.moodBias || 0) * 0.5;
   // rebrote: la tierra fertil alimenta los arbustos; cerca del campamento la isla se agota (tarda mucho mas)
   let resChanged = false;
   for (const b of sim.world.bushes) {

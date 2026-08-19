@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISLA — vivero de decorativos (13 piezas pixel-art animadas)</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body { overflow: auto; background: #060b14; }
+  .shop { max-width: 1560px; margin: 0 auto; padding: 22px 18px 80px; }
+  .shop-head { margin-bottom: 8px; }
+  .shop-head h1 { font-family: var(--mono); font-size: 19px; letter-spacing: 5px; color: var(--gold);
+    text-shadow: 0 0 18px rgba(240,194,100,.3); }
+  .shop-head p { font-size: 12px; color: var(--ink2); max-width: 860px; margin-top: 6px; line-height: 1.55; }
+  .shop-head code { color: var(--good); font-family: var(--mono); }
+  .sect { margin-top: 28px; display: flex; align-items: baseline; gap: 12px; }
+  .sect h2 { font-family: var(--mono); font-size: 14px; letter-spacing: 4px; color: var(--ink); }
+  .sect em { font-size: 11px; color: var(--ink2); font-style: normal; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 14px; margin-top: 12px; }
+  .card-decor { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #0f1c2e;
+    box-shadow: 0 14px 40px rgba(0,0,0,.45); }
+  .card-decor canvas { display: block; width: 100%; height: 330px; image-rendering: pixelated; }
+  .card-info { padding: 10px 12px 12px; }
+  .card-info b { display: block; font-size: 12.5px; color: var(--gold); letter-spacing: .04em; }
+  .card-info span { display: block; font-size: 10.5px; color: var(--ink2); margin-top: 3px; line-height: 1.45; }
+</style>
+</head>
+<body>
+<div class="shop">
+  <header class="shop-head">
+    <h1>🏗️ VIVERO DE DECORATIVOS</h1>
+    <p>13 piezas pixel-art animadas seleccionadas y mejoradas: 10 construibles de supervivencia
+      (agua · comida · oficio · campamento) + 2 hallazgos de la noche y 1 del mar. Fuego, humo,
+      hilo tensándose, hamacas con vaivén y banderas al viento — todo vivo al ritmo del juego.
+      Los pintores viven en <code>window.DECOR</code> (<code>web/decor-designs.js</code>),
+      listos para integrarse en el renderer una vez aprobados.</p>
+  </header>
+
+  <div class="sect"><h2>⛲ AGUA</h2><em>1 construible · manivela y balde que sube</em></div>
+  <div class="grid" id="gAgua"></div>
+
+  <div class="sect"><h2>🍖 COMIDA</h2><em>3 construibles · pescado al sol, horno con pan y huerto</em></div>
+  <div class="grid" id="gComida"></div>
+
+  <div class="sect"><h2>🔨 OFICIO</h2><em>3 construibles · banco de trabajo, ruleta y telar</em></div>
+  <div class="grid" id="gOficio"></div>
+
+  <div class="sect"><h2>⛺ CAMPAMENTO</h2><em>4 construibles · leñero, hamaca, farol y baúl</em></div>
+  <div class="grid" id="gCamp"></div>
+
+  <div class="sect"><h2>🌊 MAR Y NOCHE</h2><em>2 piezas · antorcha y bandera de señales</em></div>
+  <div class="grid" id="gMar"></div>
+</div>
+<script src="/decor-designs.js"></script>
+</body>
+</html>

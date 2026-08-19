@@ -28,6 +28,7 @@ export const CATALOG = {
   design_altar: { name: 'dibujar el plano del altar del DIOS', dur: 1, requires: 'design' },
   pray: { name: 'rezar al DIOS en el altar', dur: 3, requires: 'altar_done' },
   talk: { name: 'hablar con alguien', requires: 'citizen' },
+  seek_company: { name: 'ir a buscar a otra gente (caminar hacia donde los viste o sus senales)', dur: 2 },
   gift: { name: 'regalar comida a alguien', dur: 2, requires: 'citizen' },
   teach: { name: 'ensenarle a alguien lo que sabes (receta u oficio)', dur: 8, requires: 'citizen' },
   steal: { name: 'robarle comida a alguien', dur: 2, requires: 'citizen' },
@@ -132,6 +133,12 @@ export function allowedActions(c, per, world) {
     || Object.keys(c.skills).some((k) => c.skills[k] >= 50 && o.ref.skills[k] < c.skills[k] - 15)
   ));
   if (teachables.length) push('teach', teachables.map((o) => o.name).join('/'));
+  // buscar compania: solo si tiene motivos para saber que hay otros (los ve, los conocio, vio senales, o conoce el campamento)
+  {
+    const knowsOthersExist = per.others.length > 0 || (c.met && c.met.size > 0) || c.knowsCamp
+      || (c.memory.facts || []).some((f) => f.includes('huellas') || f.includes('otra persona') || f.includes('no esta solo'));
+    if (knowsOthersExist) push('seek_company', per.others.length ? `ves a ${per.others.map((o) => o.name).join('/')}` : 'no ves a nadie ahora, pero sabes que no estas solo');
+  }
   push('explore');
   push('rest');
   push('sleep');
@@ -150,23 +157,107 @@ export function restrictByCrisis(menu, urg) {
   return menu.filter((m) => ok.includes(m.id));
 }
 
-export function stepToward(c, world, target, speed = 1) {
-  // 8 vecinos ordenados por avance hacia el blanco: esquivar obstaculos sin trabarse
-  const dx = Math.sign(target.x - c.pos.x), dy = Math.sign(target.y - c.pos.y);
+// paso greedy de 8 vecinos (barato): devuelve el tile elegido o null, sin mutar nada
+function greedyStep(world, pos, target) {
+  const dx = Math.sign(target.x - pos.x), dy = Math.sign(target.y - pos.y);
   const cands = [
-    { x: c.pos.x + dx, y: c.pos.y + dy },
-    { x: c.pos.x + dx, y: c.pos.y },
-    { x: c.pos.x, y: c.pos.y + dy },
-    { x: c.pos.x + dx, y: c.pos.y + (dy || 1) },
-    { x: c.pos.x + (dx || 1), y: c.pos.y + dy },
-    { x: c.pos.x + (dx || 1), y: c.pos.y - (dy || 1) },
-    { x: c.pos.x - (dx || 1), y: c.pos.y + (dy || 1) },
-  ].filter((o) => o.x !== c.pos.x || o.y !== c.pos.y);
-  for (const o of cands) {
-    if (passable(world, o.x, o.y)) {
-      c.pos.x = o.x; c.pos.y = o.y; return true;
+    { x: pos.x + dx, y: pos.y + dy },
+    { x: pos.x + dx, y: pos.y },
+    { x: pos.x, y: pos.y + dy },
+    { x: pos.x + dx, y: pos.y + (dy || 1) },
+    { x: pos.x + (dx || 1), y: pos.y + dy },
+    { x: pos.x + (dx || 1), y: pos.y - (dy || 1) },
+    { x: pos.x - (dx || 1), y: pos.y + (dy || 1) },
+  ].filter((o) => o.x !== pos.x || o.y !== pos.y);
+  for (const o of cands) if (passable(world, o.x, o.y)) return o;
+  return null;
+}
+
+// A* acotado sobre tiles transitables: rodea el agua cuando el greedy se traba.
+// Devuelve la lista de pasos [{x,y}] (sin el origen) o null si no hay camino en el presupuesto.
+function findPath(world, sx, sy, tx, ty, budget = 6000) {
+  sx = Math.round(sx); sy = Math.round(sy); tx = Math.round(tx); ty = Math.round(ty);
+  // si el destino cae en agua, buscar el tile transitable mas cercano como meta efectiva
+  if (!passable(world, tx, ty)) {
+    let best = null, bd = 1e9;
+    for (let r = 1; r <= 3 && !best; r++) {
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = tx + dx, y = ty + dy;
+        if (passable(world, x, y)) { const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = { x, y }; } }
+      }
+    }
+    if (!best) return null;
+    tx = best.x; ty = best.y;
+  }
+  if (sx === tx && sy === ty) return [];
+  const W = world.w, key = (x, y) => y * W + x;
+  const h = (x, y) => { const ax = Math.abs(x - tx), ay = Math.abs(y - ty); return Math.max(ax, ay) + 0.41 * Math.min(ax, ay); };
+  const heap = [];
+  const push = (n) => { heap.push(n); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p].f <= heap[i].f) break; const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p; } };
+  const pop = () => { const top = heap[0]; const last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = 2 * i + 2; let m = i; if (l < heap.length && heap[l].f < heap[m].f) m = l; if (r < heap.length && heap[r].f < heap[m].f) m = r; if (m === i) break; const t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m; } } return top; };
+  const gScore = new Map([[key(sx, sy), 0]]);
+  const came = new Map();
+  const closed = new Set();
+  push({ x: sx, y: sy, g: 0, f: h(sx, sy) });
+  let expansions = 0;
+  while (heap.length && expansions < budget) {
+    const cur = pop();
+    const ck = key(cur.x, cur.y);
+    if (closed.has(ck)) continue;
+    closed.add(ck); expansions++;
+    if (cur.x === tx && cur.y === ty) {
+      const path = [];
+      let k = ck;
+      while (k != null && k !== key(sx, sy)) { path.push({ x: k % W, y: (k / W) | 0 }); k = came.get(k); }
+      return path.reverse();
+    }
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = cur.x + dx, ny = cur.y + dy;
+      if (!passable(world, nx, ny)) continue;
+      if (dx && dy && (!passable(world, cur.x + dx, cur.y) || !passable(world, cur.x, cur.y + dy))) continue; // no cortar esquinas de agua
+      const nk = key(nx, ny);
+      if (closed.has(nk)) continue;
+      const ng = cur.g + (dx && dy ? 1.41 : 1);
+      if (ng < (gScore.get(nk) ?? 1e9)) {
+        gScore.set(nk, ng);
+        came.set(nk, ck);
+        push({ x: nx, y: ny, g: ng, f: ng + h(nx, ny) });
+      }
     }
   }
+  return null;
+}
+
+export function stepToward(c, world, target, speed = 1) {
+  // 1) si ya hay un camino trazado (A*), seguilo mientras siga apuntando al blanco
+  if (c._path && c._path.length) {
+    const last = c._path[c._path.length - 1];
+    if (Math.hypot(last.x - target.x, last.y - target.y) > 3.5) c._path = null; // el blanco se movio
+    else {
+      const nxt = c._path.shift();
+      if (passable(world, nxt.x, nxt.y)) { c.pos.x = nxt.x; c.pos.y = nxt.y; return true; }
+      c._path = null; // camino bloqueado: recalcular
+    }
+  }
+  // 2) greedy barato: suficiente en terreno abierto
+  const d0 = Math.hypot(target.x - c.pos.x, target.y - c.pos.y);
+  const g = greedyStep(world, c.pos, target);
+  if (g) {
+    const d1 = Math.hypot(target.x - g.x, target.y - g.y);
+    if (d1 < d0 - 0.001) { c.pos.x = g.x; c.pos.y = g.y; return true; } // avance real
+  }
+  // 3) sin avance greedy (trabado u oscilando): rodear el obstaculo con A* acotado
+  const path = findPath(world, c.pos.x, c.pos.y, target.x, target.y);
+  if (path && path.length) {
+    c._path = path;
+    const nxt = c._path.shift();
+    if (passable(world, nxt.x, nxt.y)) { c.pos.x = nxt.x; c.pos.y = nxt.y; return true; }
+    c._path = null;
+  }
+  // 4) ultimo recurso: el paso greedy aunque no acerque (mantiene el comportamiento viejo)
+  if (g) { c.pos.x = g.x; c.pos.y = g.y; return true; }
   return false;
 }
 
@@ -214,6 +305,24 @@ export function startAction(sim, c, id, targetRef, openingSay = null) {
     const o = sim.citizens.find((x) => x.alive && (x.name === targetRef || x.id === targetRef));
     if (!o) return { ok: false, why: 'no encontras a esa persona' };
     target = { x: o.pos.x, y: o.pos.y, citizen: o.id };
+  }
+  if (id === 'seek_company') {
+    // ir a buscar gente: primero los que estan a la vista, luego las senales (huellas/humo), luego el campamento
+    const per0 = sim.perCache[c.id];
+    const vis = per0 && per0.others && per0.others.length
+      ? per0.others.slice().sort((p, q) => p.dist - q.dist)[0] : null;
+    if (vis) {
+      const o = sim.citizens.find((x) => x.alive && x.id === vis.id);
+      if (o) target = { x: o.pos.x, y: o.pos.y, citizen: o.id };
+    }
+    if (!target) {
+      const w0 = (sim.world.wonders || [])
+        .filter((w) => !w.seen && (w.kind === 'huellas' || w.kind === 'smoke'))
+        .sort((p, q) => Math.hypot(p.x - c.pos.x, p.y - c.pos.y) - Math.hypot(q.x - c.pos.x, q.y - c.pos.y))[0];
+      if (w0) target = { x: w0.x, y: w0.y, seekWonder: w0 };
+    }
+    if (!target && sim.world.campFounded && c.knowsCamp) target = { x: sim.world.camp.x, y: sim.world.camp.y };
+    if (!target) return { ok: false, why: 'todavia no sabes donde buscar a nadie' };
   }
   if (id === 'go_water') {
     // caminar al agua que conoce (la mas cercana); al llegar, bebe
@@ -336,6 +445,7 @@ export function startAction(sim, c, id, targetRef, openingSay = null) {
   }
   if (cat.requires === 'altar_done' && !sim.world.buildings.altar.done) return { ok: false, why: 'no hay altar' };
   c.action = { id, target, phase: target ? 'walk' : 'work', workLeft: cat.dur || 1, stuck: 0 };
+  c._path = null; // camino viejo de otra accion ya no sirve
   if (openingSay) c.action.openSay = openingSay;
   if (id === 'sleep') {
     // si se acuesta de noche, duerme hasta la manana; si es siesta, hasta recuperar energia
@@ -373,17 +483,20 @@ export async function stepAction(sim, c) {
       if (o) { a.target.x = o.pos.x; a.target.y = o.pos.y; }
       else return finish(sim, c, null, 'busca a la persona pero ya no esta');
     }
-    if (adjacent(c, a.target)) { a.phase = 'work'; a.stuck = 0; a.progCheck = 0; a.progDist = 0; }
+    if (adjacent(c, a.target)) { a.phase = 'work'; a.stuck = 0; a.progCheck = 0; a.progDist = 0; c._path = null; }
     else {
       // perro guardián de progreso: si en 6 ticks no te acercaste, el camino no existe para vos
+      // (mientras A* esta rodeando un obstaculo con un camino valido, la distancia en linea
+      //  recta puede no bajar: no rendirse, el camino existe aunque sea largo)
       const dNow = Math.hypot(c.pos.x - a.target.x, c.pos.y - a.target.y);
       if (!a.progDist) { a.progDist = dNow; a.progCheck = 6; }
       if (--a.progCheck <= 0) {
-        if (dNow > a.progDist - 1.5) return finish(sim, c, null, 'da vueltas sin llegar y lo deja por imposible');
+        if (dNow > a.progDist - 1.5 && !(c._path && c._path.length)) return finish(sim, c, null, 'da vueltas sin llegar y lo deja por imposible');
         a.progDist = dNow; a.progCheck = 6;
       }
       const moved = stepToward(c, world, a.target);
       if (!moved && ++a.stuck > 3) return finish(sim, c, null, 'no logra avanzar y lo deja');
+      if (moved) a.stuck = 0;
     }
     return null;
   }
@@ -486,7 +599,7 @@ async function resolve(sim, c, a) {
     case 'gather_wood': {
       const t = a.target;
       if (!t || t.amount <= 0) return finish(sim, c, null, 'los arboles ya estaban talados');
-      t.amount--; inv.wood += (c.blessings.includes('axe') ? 3 : 2) + (c.skills.gather >= 70 ? 1 : 0);
+      t.amount--; inv.wood += (c.blessings.includes('axe') ? 3 : 2) + (c.skills.gather >= 70 ? 1 : 0) + ((c.attrs && c.attrs.fuerza >= 8) ? 1 : 0);
       sim.bumpRes();
       skillUp(c, 'gather');
       markPlace(c, t.x, t.y, 'madera', `${t.amount} arboles`);
@@ -495,7 +608,7 @@ async function resolve(sim, c, a) {
     case 'gather_stone': {
       const s = a.target;
       if (!s || s.amount <= 0) return finish(sim, c, null, 'no queda piedra ahi');
-      s.amount--; inv.stone += 2 + (c.skills.gather >= 70 ? 1 : 0);
+      s.amount--; inv.stone += 2 + (c.skills.gather >= 70 ? 1 : 0) + ((c.attrs && c.attrs.fuerza >= 8) ? 1 : 0);
       sim.bumpRes();
       skillUp(c, 'gather');
       markPlace(c, s.x, s.y, 'piedra', `${s.amount} restantes`);
@@ -555,7 +668,7 @@ async function resolve(sim, c, a) {
       const d = designById(B.design);
       // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
       const woodLeft = Math.max(0, d.cost.wood - B.progress);
-      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      const inc0 = (c.skills.build >= 70 || (c.attrs && c.attrs.fuerza >= 9)) ? 2 : 1;
       let inc;
       if (woodLeft > 0) {
         inc = Math.min(inc0, woodLeft, inv.wood);
@@ -611,7 +724,7 @@ async function resolve(sim, c, a) {
       const d = fireDesignById(B.design);
       // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
       const woodLeft = Math.max(0, d.cost.wood - B.progress);
-      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      const inc0 = (c.skills.build >= 70 || (c.attrs && c.attrs.fuerza >= 9)) ? 2 : 1;
       let inc;
       if (woodLeft > 0) {
         inc = Math.min(inc0, woodLeft, inv.wood);
@@ -662,7 +775,7 @@ async function resolve(sim, c, a) {
       const dA = altarDesignById(A.design);
       // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
       const woodLeft = Math.max(0, dA.cost.wood - A.progress);
-      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      const inc0 = (c.skills.build >= 70 || (c.attrs && c.attrs.fuerza >= 9)) ? 2 : 1;
       let inc;
       if (woodLeft > 0) {
         inc = Math.min(inc0, woodLeft, inv.wood);
@@ -718,7 +831,7 @@ async function resolve(sim, c, a) {
       const d = boatDesignById(B.design);
       // consumo exacto por punto de obra: madera hasta cubrir su costo, luego piedra
       const woodLeft = Math.max(0, d.cost.wood - B.progress);
-      const inc0 = c.skills.build >= 70 ? 2 : 1;
+      const inc0 = (c.skills.build >= 70 || (c.attrs && c.attrs.fuerza >= 9)) ? 2 : 1;
       let inc;
       if (woodLeft > 0) {
         inc = Math.min(inc0, woodLeft, inv.wood);
@@ -855,6 +968,34 @@ async function resolve(sim, c, a) {
       }
       sim.startConversation(c, o);
       return { kind: 'done', text: null, action: 'talk' };
+    }
+    case 'seek_company': {
+      if (a.target && a.target.citizen) {
+        const o = sim.citizens.find((x) => x.id === a.target.citizen);
+        if (o && o.alive) {
+          if (adjacent(c, o.pos, 2.5) && !o.inConversation && !c.inConversation) {
+            sim.startConversation(c, o);
+            return { kind: 'done', text: null, action: 'seek_company' };
+          }
+          if (adjacent(c, o.pos, 2.5)) return finish(sim, c, `encuentra a ${o.name}, pero ${o.name} ya estaba charlando`);
+          return finish(sim, c, null, `llega a donde vio a ${o.name}, pero ya no esta`);
+        }
+        return finish(sim, c, null, 'llega a donde vio a la persona, pero ya no esta');
+      }
+      if (a.target && a.target.seekWonder) {
+        const w0 = a.target.seekWonder;
+        if (!w0.seen && Math.hypot(w0.x - c.pos.x, w0.y - c.pos.y) <= 6) {
+          w0.seen = true;
+          const txt = w0.kind === 'huellas'
+            ? 'sigue las huellas hasta una zona pisoteada: alguien vivo paso por aqui hace poco'
+            : 'llega al origen del humo: un fogon frio, abandonado, con huellas alrededor';
+          remember(c, { kind: 'exploracion', text: txt, salience: 4, emotion: +4 });
+          c.curiosity = Math.min(100, (c.curiosity || 0) + 15);
+          sim.emit('descubrimiento', `${c.name} ${txt}`, 3);
+        }
+        return finish(sim, c, 'busca senales de otra gente');
+      }
+      return finish(sim, c, 'baja al campamento buscando compania');
     }
     case 'gift': {
       const o = sim.citizens.find((x) => x.id === a.target.citizen);
