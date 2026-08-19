@@ -33,20 +33,25 @@ const DIALOG_END = ['bueno, sigo con lo mio', 'me voy yendo, se me hace tarde', 
 const GOD_REPLY_DEMAND = ['AUN NO. Tu ofrenda es pobre y tu fe tibia.', 'MAS. Trae mas, y demuestra que crees.', 'El conocimiento tiene precio. Vuelve cuando valgas mas.', 'Escucho plegarias, no mendigos. Vuelve con algo entre las manos.'];
 const GOD_REPLY_GRANT = ['TOMA. El conocimiento es tuyo. No defraudes mi regalo.', 'ESTA BIEN. Que tu obra hable de mi.', 'ACEPTADO. Usalo bien, que yo veo todo.', 'TU FE ME AGRADA. Tomalo.'];
 
-const usedSays = new Set();
 const TAILS = ['', ', nada mas', ' y listo', ', la verdad', '... bueno', ' otra vez', ' nomas', ' y a seguir', ' hoy', ', que le vamos a hacer', ' de una', ', con todo'];
-function freshSay(pool, rng) {
-  for (let i = 0; i < 12; i++) {
-    const s = pool[Math.floor(rng.next() * pool.length)] + TAILS[Math.floor(rng.next() * TAILS.length)];
-    if (!usedSays.has(s)) { usedSays.add(s); if (usedSays.size > 400) usedSays.clear(); return s; }
-  }
-  return pool[Math.floor(rng.next() * pool.length)] + TAILS[Math.floor(rng.next() * TAILS.length)];
-}
 const pick = (arr, rng) => arr[Math.floor(rng.next() * arr.length)];
 
 export function createHeuristic() {
+  // dedupe de frases POR INSTANCIA (no module-level): asi cada provider tiene su historial
+  // y la persistencia puede guardarlo/restaurarlo (restore bit-fiel del flujo de RNG)
+  const usedSays = new Set();
+  function freshSay(pool, rng) {
+    for (let i = 0; i < 12; i++) {
+      const s = pool[Math.floor(rng.next() * pool.length)] + TAILS[Math.floor(rng.next() * TAILS.length)];
+      if (!usedSays.has(s)) { usedSays.add(s); if (usedSays.size > 400) usedSays.clear(); return s; }
+    }
+    return pool[Math.floor(rng.next() * pool.length)] + TAILS[Math.floor(rng.next() * TAILS.length)];
+  }
   return {
     name: 'heuristic',
+    // persistencia: estado interno del provider (historial de frases ya dichas)
+    getState() { return { usedSays: [...usedSays] }; },
+    setState(s) { usedSays.clear(); for (const x of (s && s.usedSays) || []) usedSays.add(x); },
     async decide(ctx) {
       const { menu, urg, c, per, rng, traits, maslow } = ctx;
       const has = (id) => menu.some((m) => m.id === id);

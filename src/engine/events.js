@@ -14,6 +14,9 @@ function dirName(from, to) {
 export function createEvents() {
   const state = { lastNightSound: -999, smoke: false, whale: false, boat: false, fruits: 0, lastSignal: -999 };
   return {
+    // persistencia: exponer/reconstruir el estado interno de eventos exogenos
+    getState() { return { ...state }; },
+    setState(s) { Object.assign(state, s || {}); },
     tick(sim) {
       const alive = sim.citizens.filter((c) => c.alive);
       const night = isNight(sim.tick);

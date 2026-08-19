@@ -9,6 +9,7 @@ import { createHeuristic } from './src/agents/heuristic.js';
 import { createOpenAI } from './src/agents/openai.js';
 import { buildChainFromEnv } from './src/agents/fallback.js';
 import { TICKS_PER_DAY } from './src/engine/body.js';
+import { serializeSim, restoreSim } from './src/engine/persist.js';
 
 const args = process.argv.slice(2);
 const arg = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
@@ -85,6 +86,55 @@ let paused = false;
 let loopRunning = false;
 let clients = new Set();
 let lastResV = -1;            // ultima version de recursos enviada a los clientes
+
+// ===== PERSISTENCIA =====
+// El unico punto dependiente del hosting: donde vive el archivo. ISLA_SAVE_DIR apunta
+// al lugar durable del host (disco local en tu PC, volumen montado en un VPS).
+const SAVE_DIR = process.env.ISLA_SAVE_DIR || path.resolve('data');
+const SAVE_FILE = path.join(SAVE_DIR, 'isla-save.json');
+const AUTOSAVE_EVERY = 12;    // cada 12 ticks = 1 hora de juego (~30s reales)
+
+function saveSim(reason = 'autosave') {
+  if (!sim) return false;
+  try {
+    fs.mkdirSync(SAVE_DIR, { recursive: true });
+    const data = JSON.stringify(serializeSim(sim));
+    const tmp = SAVE_FILE + '.tmp';
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, SAVE_FILE); // atomico: nunca queda un save a medio escribir
+    console.log(`[save] ${reason}: dia ${sim.day} tick ${sim.tick} (${(data.length / 1024).toFixed(0)} KB)`);
+    return true;
+  } catch (e) {
+    console.error(`[save] FALLO al guardar (${reason}):`, e.message);
+    return false;
+  }
+}
+
+function tryRestore() {
+  if (!fs.existsSync(SAVE_FILE)) return false;
+  try {
+    const data = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
+    sim = restoreSim(data, {
+      provider: providerFor(DEFAULT_PROVIDER),
+      onDay(day, s) { console.log(`  dia ${day}: vivos=${s.citizens.filter((c) => c.alive).length} devocion=${Math.round(s.god.devotion)}`); },
+    });
+    paused = false;
+    lastResV = -1;
+    console.log(`[restore] temporada recuperada del save: dia ${sim.day}, tick ${sim.tick}, ${sim.citizens.filter((c) => c.alive).length} vivos`);
+    broadcast('reset', snapshot(true));
+    if (!loopRunning) { loopRunning = true; runLoop(); }
+    return true;
+  } catch (e) {
+    console.error('[restore] save corrupto o incompatible, se ignora:', e.message);
+    return false;
+  }
+}
+
+// guardar al apagar: SIGINT/SIGTERM (Ctrl+C, kill, shutdown del host)
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { saveSim(sig); process.exit(0); });
+}
+process.on('exit', () => { try { saveSim('exit'); } catch {} });
 
 function providerFor(name) {
   if (name === 'ollama') return createOllama({ model: DEFAULT_MODEL });
@@ -184,6 +234,7 @@ async function runLoop() {
     try {
       await simTick(sim);
       if (sim) broadcast('tick', snapshot(false)); // /api/stop puede nullar sim durante el await
+      if (sim && sim.abs % AUTOSAVE_EVERY === 0) saveSim('autosave');
     } catch (e) {
       console.error('tick error (el mundo sigue):', e.message);
     }
@@ -224,6 +275,7 @@ const server = http.createServer(async (req, res) => {
       if (raw.length < 1) { json(res, { ok: false, error: 'se necesita al menos 1 tripulante' }); return; }
       const citizens = raw.map((c, i) => normalizeCitizen(c, i));
       await startSeason({ seed: body.seed, citizens, provider: body.provider || DEFAULT_PROVIDER });
+      saveSim('nueva temporada'); // temporada nueva pisa el save anterior
       json(res, { ok: true, seed: sim.cfg.seed, crew: citizens.length });
       return;
     }
@@ -239,6 +291,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/stop' && req.method === 'POST') {
       const wasRunning = !!sim;
       sim = null;
+      // parada intencional: se borra el save para no revivir la temporada al reiniciar
+      try { if (fs.existsSync(SAVE_FILE)) fs.unlinkSync(SAVE_FILE); } catch {}
       for (const res2 of clients) { try { res2.write('event: stop\ndata: {}\n\n'); } catch {} }
       json(res, { ok: true, wasRunning });
       return;
@@ -272,5 +326,10 @@ function readBody(req) {
 
 server.listen(PORT, () => {
   console.log(`ISLA en vivo -> http://localhost:${PORT}  (provider: ${DEFAULT_PROVIDER}${DEFAULT_PROVIDER === 'ollama' ? ':' + DEFAULT_MODEL : ''})`);
-  console.log('La temporada arranca cuando abras la pagina y presiones COMENZAR.');
+  // auto-restore: si hay save, la temporada continua donde quedo (crash, reinicio, deploy)
+  if (tryRestore()) {
+    console.log('Temporada restaurada automaticamente del save.');
+  } else {
+    console.log('La temporada arranca cuando abras la pagina y presiones COMENZAR.');
+  }
 });

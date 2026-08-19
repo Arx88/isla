@@ -1,7 +1,7 @@
 // util.js — PRNG con semilla + ruido de valor + fbm (puro, sin I/O)
 export function mulberry32(seed) {
   let a = seed >>> 0;
-  return {
+  const rng = {
     next() {
       a |= 0; a = (a + 0x6D2B79F5) | 0;
       let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -11,7 +11,17 @@ export function mulberry32(seed) {
     pick(arr) { return arr[Math.floor(this.next() * arr.length)]; },
     chance(p) { return this.next() < p; },
     int(a, b) { return a + Math.floor(this.next() * (b - a + 1)); },
+    // persistencia: exponer/reconstruir el estado interno
+    state() { return a >>> 0; },
+    setState(v) { a = v >>> 0; },
   };
+  return rng;
+}
+// restaura un mulberry32 desde un estado guardado (misma secuencia a partir de ahi)
+export function mulberry32FromState(st) {
+  const rng = mulberry32(0);
+  rng.setState(st >>> 0);
+  return rng;
 }
 
 export function hash2(x, y, s) {

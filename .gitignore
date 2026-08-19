@@ -13,3 +13,6 @@ node_modules/
 
 # artefactos de prueba
 vision_test.png
+
+# saves de persistencia (estado del mundo, no codigo)
+data/
