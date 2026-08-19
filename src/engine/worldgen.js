@@ -175,7 +175,7 @@ export function generateWorld(seed, opts = {}) {
       if (b2 === BIOME.SAND) sand = true;
       if (b2 === BIOME.OCEAN || b2 === BIOME.SHAL) salt = true;
     }
-    if (sand) world.riverMouths.push({ x, y });
+    if (sand && salt) world.riverMouths.push({ x, y });
   }
   const addRes = (arr, x, y, extra) => arr.push(Object.assign({ x, y }, extra));
 

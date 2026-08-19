@@ -1,6 +1,7 @@
 // ollama.js — provider LLM local via Ollama (chat no-streaming, limiter, backoff, sin dependencias)
 import { buildDecisionMessages, parseDecision, buildDialogueMessages, parseDialogue,
-  buildPleaMessages, parsePlea, buildGodMessages, parseGod, buildRetryMessages } from './brain.js';
+  buildPleaMessages, parsePlea, buildGodMessages, parseGod, buildRetryMessages,
+  buildMeetingMessages, parseMeeting } from './brain.js';
 import { makeLimiter } from './limiter.js';
 
 const lim = makeLimiter({ concurrency: 1, minSpacingMs: 300 });
@@ -52,6 +53,11 @@ export function createOllama({ model = 'qwen2.5:7b', baseUrl = 'http://localhost
       const d = parseDecision(await ask(buildRetryMessages(ctx, prevSay), { maxTokens: 200, temperature: 0.85 }), ctx.menu);
       if (!d || !d.say) throw new Error('retry no parseable');
       return d.say;
+    },
+    async firstMeeting(ctx) {
+      const d = parseMeeting(await ask(buildMeetingMessages(ctx), { maxTokens: 120, temperature: 0.8 }));
+      if (!d) throw new Error('saludo no parseable');
+      return d;
     },
     async dialogueLine(ctx) {
       const d = parseDialogue(await ask(buildDialogueMessages(ctx), { maxTokens: 110, temperature: 0.7 }));

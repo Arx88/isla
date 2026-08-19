@@ -186,7 +186,7 @@ function nearCamp(c, world) {  const d = Math.hypot(c.pos.x - world.camp.x, c.po
 
 function doingWords(id) {
   const M = {
-    drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', gather_wood: 'talando',
+    drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', dry_food: 'secando comida al sol', gather_wood: 'talando',
     gather_stone: 'juntando piedras', fish: 'pescando', build_shelter: 'construyendo el refugio',
     design_shelter: 'dibujando un plano de refugio',
     design_fire: 'trazando el plano de una fogata',

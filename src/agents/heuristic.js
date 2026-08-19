@@ -5,6 +5,7 @@ const SAY = {
   eat: ['algo en el estomago', 'esto sostiene', 'no es un banquete pero sirve', 'a comer entonces', 'con esto llego a la noche', 'bayas otra vez, bueno', 'a la boca', 'comida es vida'],
   forage: ['bayas para rato', 'el arbusto estaba cargado', 'manos a la obra', 'algo es algo', 'la isla da de comer si buscais', 'a llenar la mochila', 'dulces y salvajes', 'otro arbotal', 'estas son las buenas', 'que el monte provea', 'un punado mas y basta', 'rojas y gordas, mira', 'me mancho los dedos pero vale', 'esto no se compra en ningun lado', 'la tierra es generosa hoy'],
   fish: ['a ver si pican', 'paciencia y mar', 'hoy quiero pescado', 'el mar provee', 'otra vez al agua', 'la caña y la fe', 'silencio, que pican', 'pez o nada'],
+  dry_food: ['al sol, que se conserve', 'esto no se va a pudrir', 'sol y tiempo, nada mas', 'a secar para guardar', 'que el sol haga su parte', 'sin fuego ni milagros: sol nomas', 'carne seca para los dias malos', 'el sol tambien cocina', 'asi dura mas', 'tendido al sol, como en casa'],
   gather_wood: ['madera, siempre madera', 'talar cansa pero hay que hacerlo', 'esto sera un techo', 'palo tras palo', 'lena para el campamento', 'los arboles no van a protestar', 'una mas y vamos', 'sudor y astillas', 'que el hacha no se trabe', 'tronco firme, buen corte', 'cada rama cuenta', 'este arbol dio buena madera', 'los brazos ya lo saben de memoria', 'madera seca, mejor asi', 'uno mas para la pila comun'],
   gather_stone: ['piedras para el altar', 'que pesada es la fe', 'esto servira', 'piedra a piedra', 'el campamento necesita esto', 'a pulso nomas', 'otra vuelta con estas', 'los hombros lo sienten', 'granito, buena veta', 'que no se me resbale', 'carga la espalda y sigue', 'esta pesa lo suyo', 'roca dura, voluntad mas dura', 'una a una hasta la obra', 'el DIOS vera mi esfuerzo'],
   build_shelter: ['un techo antes de la lluvia', 'esto nos va a cubrir', 'viga a viga', 'quedate firme', 'aqui viviremos mejor', 'que nadie diga que no trabajo', 'poco a poco, firme', 'casa se hace con manos'],
@@ -67,12 +68,14 @@ export function createHeuristic() {
         else if (hungry && has('eat')) actionId = 'eat';
         else if (!urg.crisis && (c.curiosity || 0) > 50 && has('explore') && rng.chance(0.3)) actionId = 'explore';
         else if (foodInv < 2 && has('forage') && rng.chance(0.6)) actionId = 'forage';
+        else if (c.needs.food > 60 && has('fish') && rng.chance(0.5)) actionId = 'fish'; // con hambre, pescar: el pescado se puede secar
         else if (maslow < 2 && !per.shelterDone && c.inventory.wood >= 2 && has('build_shelter')) actionId = 'build_shelter';
         else if (has('design_shelter') && !(per.shelterEnv && per.shelterEnv.any) && rng.chance(0.85)) actionId = 'design_shelter';
         else if (has('build_shelter') && (c.inventory.wood >= 1 || c.inventory.stone >= 1) && rng.chance(0.55)) actionId = 'build_shelter';
         else if (has('design_shelter') && rng.chance(0.3)) actionId = 'design_shelter';
         else if (has('build_fire') && (c.inventory.wood >= 1 || c.inventory.stone >= 1) && rng.chance(0.45)) actionId = 'build_fire';
         else if (has('design_fire') && !(per.fireEnv && per.fireEnv.any) && rng.chance(0.3)) actionId = 'design_fire';
+        else if (has('dry_food') && (c.inventory.fish > 0 || c.inventory.meat > 0) && rng.chance(0.5)) actionId = 'dry_food';
         else if (has('gather_wood') && rng.chance(per.shelterDone ? 0.35 : 0.7) && !(per.shelterDone && c.inventory.wood >= 8)) actionId = 'gather_wood';
         else if (traits.devoto > 0.4 && has('pray') && rng.chance(0.5)) actionId = 'pray';
         else if (has('teach') && rng.chance(0.3)) actionId = 'teach';
@@ -119,6 +122,7 @@ export function createHeuristic() {
       const pool = SAY[ctx.chosenAction] || SAY.rest;
       return freshSay(pool, ctx.rng);
     },
+    async firstMeeting() { return null; }, // sin LLM: el saludo lo pone el motor por personalidad
     async dialogueLine(ctx) {
       const { listener, recentLines, rng } = ctx;
       const rel = listener.rel || 0;

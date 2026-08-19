@@ -3,7 +3,7 @@ import { generateWorld, tickAnimals, passable } from './worldgen.js';
 import { mulberry32, clamp } from './util.js';
 import { updateBody, bodyWords, urgency, maslowLayer, MASLOW_NAME, isNight, TICKS_PER_DAY, mkSkills, skillWords,
   mkEmotions, addEmotion, decayEmotions, dominantEmotion, emotionWords, updateTemp, rollAttributes } from './body.js';
-import { remember, memoryWords, addFact, markPlace, placesWords, dangerNear } from './memory.js';
+import { remember, memoryWords, addFact, markPlace, placesWords, dangerNear, adjustRel } from './memory.js';
 import { perceive, perceptionWords, revealFog } from './perception.js';
 import { allowedActions, restrictByCrisis, startAction, stepAction, CATALOG } from './actions.js';
 import { contextKey, habitFor, recordOutcome, decayHabits } from './habits.js';
@@ -39,7 +39,7 @@ export function createCitizen(def, world, i, total) {
     mood: 68, moodBias: 0, sick: 0, skills: mkSkills(),
     emotions: mkEmotions(), temp: 36.8, attrs: def.attrs || rollAttributes(def.name + def.id + (i + 1)),
     thoughtLog: [], currentGoal: null, inLoveWith: null,
-    inventory: { berries: 1, fish: 0, meat: 0, wood: 0, stone: 0 },
+    inventory: { berries: 1, fish: 0, meat: 0, wood: 0, stone: 0, dried: 0 },
     memory: { recent: [], relations: {}, facts: [], places: {} },
     met: new Set(), knowsCamp: false, convoLog: [],
     habits: {}, knownRecipes: [], blessings: [], knownTiles: new Set(), knownWaters: [],
@@ -56,6 +56,30 @@ export function createCitizen(def, world, i, total) {
   revealFog(c, world);
   arrivalMemory(c, world);
   return c;
+}
+
+// B10: saludo del PRIMER ENCUENTRO. Con LLM lo dice el modelo (con el instructivo); sin LLM,
+// o si el modelo falla, frases por rasgos de personalidad. Las frases quedan en el registro
+// de la isla para que no se repitan despues.
+async function meetingGreetings(sim, a, b) {
+  const canned = () => [firstGreeting(a, b, sim.rng), firstGreeting(b, a, sim.rng)];
+  if (typeof sim.provider.firstMeeting !== 'function') return canned();
+  const [ra, rb] = await Promise.all([
+    sim.provider.firstMeeting({ speaker: a, other: b, rng: sim.rng }).then((r) => (r && r.say) || null).catch(() => null),
+    sim.provider.firstMeeting({ speaker: b, other: a, rng: sim.rng }).then((r) => (r && r.say) || null).catch(() => null),
+  ]);
+  let ga = ra || firstGreeting(a, b, sim.rng);
+  let gb = rb || firstGreeting(b, a, sim.rng);
+  if (ga === gb || sim.metrics.says.includes(ga)) ga = firstGreeting(a, b, sim.rng);
+  if (sim.metrics.says.includes(gb)) gb = firstGreeting(b, a, sim.rng);
+  sim.metrics.says.push(ga); sim.metrics.says.push(gb);
+  sim.metrics.sayLog = sim.metrics.sayLog || [];
+  sim.metrics.sayLog.push({ id: a.id, name: a.name, text: ga });
+  sim.metrics.sayLog.push({ id: b.id, name: b.name, text: gb });
+  if (sim.metrics.sayLog.length > 40) { sim.metrics.sayLog.shift(); sim.metrics.sayLog.shift(); }
+  a.lastSays.push(ga); if (a.lastSays.length > 5) a.lastSays.shift();
+  b.lastSays.push(gb); if (b.lastSays.length > 5) b.lastSays.shift();
+  return [ga, gb];
 }
 
 // memoria del naufragio: al llegar vieron (de lejos) donde hay agua, comida y materiales
@@ -237,9 +261,10 @@ export async function simTick(sim) {
       addEmotion(o, o.traits.ansioso > 0.5 ? 'miedo' : 'alegria', o.traits.ansioso > 0.5 ? 20 : 25, `ver a ${c.name}`);
       remember(c, { kind: 'encuentro', text: `encontro a ${o.name} en la isla`, salience: 5, emotion: 5 });
       remember(o, { kind: 'encuentro', text: `encontro a ${c.name} en la isla`, salience: 5, emotion: 5 });
-      c.visualSay = { text: firstGreeting(c, o, sim.rng), until: sim.abs + 5 };
-      o.visualSay = { text: firstGreeting(o, c, sim.rng), until: sim.abs + 5 };
-      sim.emit('vinculo', `PRIMER ENCUENTRO: ${c.name} y ${o.name} se cruzan por primera vez. Ninguno sabia del otro.`, 5);
+      const [sa, sb] = await meetingGreetings(sim, c, o);
+      c.visualSay = { text: sa, until: sim.abs + 5 };
+      o.visualSay = { text: sb, until: sim.abs + 5 };
+      sim.emit('vinculo', `PRIMER ENCUENTRO: ${c.name} y ${o.name} se cruzan por primera vez. Ninguno sabia del otro. ${c.name}: "${sa}"`, 5);
     }
     // estar cerca de una zona que recuerda peligrosa: el cuerpo se tensa
     if (!c._nearDangerTick || sim.abs - c._nearDangerTick > 40) {
@@ -430,7 +455,7 @@ async function decideNext(sim, c) {
   if (!cooldownOk) { const st = startAction(sim, c, 'rest'); if (st.ok) c.action.habitKey = null; return; }
   c.lastDeliberationAbs = sim.abs;
 
-  let menu0 = allowedActions(c, per, sim.world);
+  let menu0 = allowedActions(c, per, sim.world, sim);
   if (sim.weather === 'storm') menu0 = menu0.filter((m) => m.id !== 'fish' && m.id !== 'sail_away'); // con tormenta no se pesca ni se zarpa
   // las emociones moldean el menu: el miedo no se va a explorar solo a lo oscuro
   const dom = dominantEmotion(c);
@@ -449,7 +474,7 @@ async function decideNext(sim, c) {
     if (!altarObj.done && altarObj.design && c.inventory.stone >= 4) menuH = menuH.filter((m) => m.id !== 'gather_stone');
     if (!shelterFinished && c.inventory.wood >= 6) menuH = menuH.filter((m) => m.id !== 'gather_wood');
     // con comida de sobra, juntar mas sale del menu (se pudre de todos modos: la intuicion humana de "ya alcanza")
-    const foodInv = c.inventory.berries + c.inventory.fish;
+    const foodInv = c.inventory.berries + c.inventory.fish + (c.inventory.dried || 0);
     if (foodInv >= 5) menuH = menuH.filter((m) => m.id !== 'forage' && m.id !== 'fish');
   }
   // aburrimiento: repetir la misma tarea de trabajo 4+ veces seguidas la saca del menu (la variedad es humana)

@@ -1396,7 +1396,7 @@ function updateRosterSide() {
     if (pcv) paintPortrait(pcv, c, 13, performance.now() + (c.name.charCodeAt(0) || 0) * 900);
   }
 }
-const ACTION_LABELS = { drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', fish: 'pescando', gather_wood: 'talando', gather_stone: 'juntando piedra', build_shelter: 'construyendo refugio', design_shelter: 'trazando plano de refugio', design_fire: 'trazando plano de fogata', build_fire: 'armando fogata', design_altar: 'trazando plano de altar', build_altar: 'levantando altar', pray: 'rezando', talk: 'hablando', gift: 'regalando', teach: 'enseñando', explore: 'explorando', rest: 'descansando', sleep: 'durmiendo', craft: 'fabricando', design_boat: 'trazando plano de barco', build_boat: 'trabajando en el barco', sail_away: 'zarpando de la isla' };
+const ACTION_LABELS = { drink: 'bebiendo', eat: 'comiendo', forage: 'juntando bayas', fish: 'pescando', gather_wood: 'talando', gather_stone: 'juntando piedra', build_shelter: 'construyendo refugio', design_shelter: 'trazando plano de refugio', design_fire: 'trazando plano de fogata', build_fire: 'armando fogata', design_altar: 'trazando plano de altar', build_altar: 'levantando altar', dry_food: 'secando comida al sol', pray: 'rezando', talk: 'hablando', gift: 'regalando', teach: 'enseñando', explore: 'explorando', rest: 'descansando', sleep: 'durmiendo', craft: 'fabricando', design_boat: 'trazando plano de barco', build_boat: 'trabajando en el barco', sail_away: 'zarpando de la isla' };
 const actionLabel = (a) => ACTION_LABELS[a] || '…';
 const WEATHER_LABEL = { clear: '☀ despejado', cloudy: '⛅ nublado', rain: '🌧 lluvia', storm: '⛈ TORMENTA', heat: '🔥 ola de calor', fog: '🌫 niebla' };
 

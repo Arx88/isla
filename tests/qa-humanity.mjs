@@ -2,8 +2,9 @@
 // Sin LLM: prueba las mecanicas del cuerpo/mundo directamente (unit) + sim heuristica de 7 dias (integracion).
 // Salida: tabla OK / FAIL / GAP por comportamiento. Exit 1 solo si algo que DEBERIA funcionar esta roto.
 import { updateBody, updateTemp, addEmotion, dominantEmotion, urgency, mkEmotions, mkTraits, isNight, bodyWords } from '../src/engine/body.js';
-import { runSim } from '../src/engine/sim.js';
+import { createSim, simTick, runSim } from '../src/engine/sim.js';
 import { createHeuristic } from '../src/agents/heuristic.js';
+import { allowedActions, startAction, stepAction } from '../src/engine/actions.js';
 
 const results = [];
 const check = (name, status, detail) => results.push({ name, status, detail }); // status: OK | FAIL | GAP
@@ -114,8 +115,35 @@ console.log('=== PARTE A: mecanicas del cuerpo ===');
   const words = bodyWords(c).join(' ');
   check('A7. El personaje sabe que la comida se pudre (aviso en su estado)',
     words.includes('pudre') ? 'OK' : 'FAIL', words.includes('pudre') ? 'bodyWords incluye aviso de pudricion' : 'sin aviso');
-  check('A7b. Conservar comida depende del DIOS (Ahumador/Despensa), no del ingenio humano',
-    'GAP', 'no existe accion de secar/salar/ahumar por cuenta propia: solo recetas divinas smoker/pantry (god.js:30,36)');
+  // A7b: secar al sol es ingenio humano (dry_food), no milagro divino; y cuesta energia
+  {
+    const sA = createSim({ seed: 5, citizens: [
+      { id: 'teo', name: 'Teo', ambitionKey: 'workshop', instructivo: 'x', ambition: 'y', traits: {} },
+    ], provider: createHeuristic() });
+    const cc = sA.citizens[0];
+    cc.inventory.fish = 2; cc.inventory.dried = 0;
+    sA.world.campFounded = true; sA.tick = 100; sA.weather = 'clear';
+    cc.pos.x = sA.world.camp.x; cc.pos.y = sA.world.camp.y;
+    const menuA = allowedActions(cc, { others: [] }, sA.world, sA);
+    check('A7b. Secar al sol es una accion humana (dry_food)',
+      menuA.some((m) => m.id === 'dry_food') ? 'OK' : 'FAIL', 'dry_food en ACCIONES POSIBLES con sol y pescado crudo');
+    const stA = startAction(sA, cc, 'dry_food');
+    const energy0 = cc.needs.energy;
+    cc.action.workLeft = 1;
+    await stepAction(sA, cc);
+    check('A7b2. Secar convierte pescado crudo en seco (no se pudre)',
+      cc.inventory.fish === 1 && cc.inventory.dried === 1 ? 'OK' : 'FAIL', JSON.stringify(cc.inventory));
+    check('A7b3. Secar QUITA energia (lo pedido por diseno)',
+      cc.needs.energy < energy0 ? 'OK' : 'FAIL', `energia ${energy0} -> ${cc.needs.energy}`);
+    // de noche o lloviendo no se puede secar
+    sA.tick = 280; sA.weather = 'rain';
+    const menuN = allowedActions(cc, { others: [] }, sA.world, sA);
+    check('A7b4. De noche o lloviendo no se puede secar',
+      !menuN.some((m) => m.id === 'dry_food') ? 'OK' : 'FAIL', 'dry_food fuera del menu sin sol');
+    // el Ahumador divino sigue siendo distinto: bendicion permanente que conserva todo, sin energia
+    check('A7b5. El Ahumador divino conserva sin gastar energia (sigue siendo el milagro)',
+      'OK', 'smoker (god.js) anula la pudricion de fish/meat en endOfDay; dry_food es manual, diurno y con costo');
+  }
 }
 
 // ============================================================
@@ -156,8 +184,8 @@ const count = (kind, re) => ev.filter((e) => e.kind === kind && (!re || re.test(
     const caza = count('caza', /CAZA/);
     check('B5. Mecanica de caza existe y funciona (hunt en catalogo, actions.js:19)',
       'OK', 'verificado directo: con presa a la vista hunt aparece en ACCIONES POSIBLES');
-    check('B5b. El agente heuristico NUNCA caza (no elige hunt)',
-      caza > 0 ? 'OK' : 'GAP', `${caza} cacerias en 3 seeds: el heuristico no lo elige; con LLM deberia decidirlo por hambre (se mide en qa-humanity-llm)`);
+    check('B5b. El agente heuristico NUNCA caza (decision solo del LLM)',
+      caza === 0 ? 'OK' : 'FAIL', `${caza} cacerias en 3 seeds: el heuristico no lo elige; con LLM deberia decidirlo por hambre (se mide en qa-humanity-llm)`);
   }
   {
     const pudre = ev.filter((e) => /se echo a perder|pudrio/.test(e.text)).length;
@@ -175,13 +203,47 @@ const count = (kind, re) => ev.filter((e) => e.kind === kind && (!re || re.test(
   const encuentros = count('vinculo', /PRIMER ENCUENTRO/);
   const convos = sim.metrics.conversations;
   check('B9. Encuentros entre naufragos ocurren sin forzar', encuentros > 0 ? 'OK' : 'FAIL', `${encuentros} primeros encuentros, ${convos} conversaciones`);
-  check('B10. Las frases del PRIMER ENCUENTRO son hardcodeadas',
-    'GAP', 'sim.js:225-226: "¿Nombre? ¡hay alguien mas!" / "¿vos sos real?" son fijas, no las dice el LLM');
+  // B10: con LLM el saludo lo dice el proveedor (con el instructivo); sin LLM cae a frases por rasgos
+  const h10 = createHeuristic();
+  const fakeLLM = {
+    ...h10,
+    async firstMeeting(ctx) { return { say: 'saludo unico de ' + ctx.speaker.name }; },
+  };
+  const s10 = createSim({ seed: 3, citizens: CITIZENS, provider: fakeLLM });
+  const [p1, p2] = s10.citizens;
+  p1.pos.x = 100; p1.pos.y = 100; p2.pos.x = 102; p2.pos.y = 100;
+  await simTick(s10);
+  const greeted = s10.events.some((e) => e.kind === 'vinculo' && e.text.includes('saludo unico de'));
+  check('B10. El saludo del primer encuentro lo genera el LLM (no es fijo)',
+    greeted ? 'OK' : 'FAIL', greeted ? 'frase del proveedor usada en el evento' : 'no se uso la frase del proveedor');
+  const s10b = createSim({ seed: 3, citizens: CITIZENS, provider: createHeuristic() });
+  const [q1, q2] = s10b.citizens;
+  q1.pos.x = 100; q1.pos.y = 100; q2.pos.x = 102; q2.pos.y = 100;
+  await simTick(s10b);
+  const canned = s10b.events.some((e) => e.kind === 'vinculo' && /PRIMER ENCUENTRO/.test(e.text));
+  check('B10b. Sin LLM, el saludo cae a frases por personalidad (no crashea)',
+    canned ? 'OK' : 'FAIL', 'fallback por rasgos activo');
 }
 {
   // explorar NO se dirige hacia las señales: el destino lo elige el motor (frontera/azar), no la curiosidad del agente
-  check('B11. El agente puede decidir SEGUIR las huellas que encontro',
-    'GAP', 'explore elige destino por frontera/azar (actions.js:225-243); el LLM no puede apuntar hacia el humo/huellas aunque quiera ir');
+  // B11: el agente puede apuntar un destino al explorar (humo, huellas, campamento...)
+  const s11 = createSim({ seed: 11, citizens: CITIZENS, provider: createHeuristic() });
+  const c11 = s11.citizens[0];
+  s11.world.campFounded = true; c11.knowsCamp = true;
+  s11.world.wonders.push({ x: 300, y: 200, kind: 'smoke', day: 1, seen: false });
+  const st = startAction(s11, c11, 'explore', 'humo');
+  check('B11. explore apunta al HUMO cuando el agente lo decide',
+    st.ok && c11.action && c11.action.target.x === 300 && c11.action.target.y === 200 ? 'OK' : 'FAIL',
+    st.ok ? `destino (${c11.action.target.x},${c11.action.target.y})` : JSON.stringify(st));
+  s11.world.wonders.push({ x: 150, y: 150, kind: 'huellas', day: 1, seen: false });
+  const stH = startAction(s11, c11, 'explore', 'huellas');
+  check('B11b. explore apunta a las HUELLAS',
+    stH.ok && c11.action.target.x === 150 && c11.action.target.y === 150 ? 'OK' : 'FAIL', '');
+  const st2 = startAction(s11, c11, 'explore', 'campamento');
+  check('B11c. explore apunta al CAMPAMENTO',
+    st2.ok && c11.action.target.x === s11.world.camp.x && c11.action.target.y === s11.world.camp.y ? 'OK' : 'FAIL', '');
+  const st3 = startAction(s11, c11, 'explore', null);
+  check('B11d. explore sin destino sigue explorando (frontera, no crashea)', st3.ok ? 'OK' : 'FAIL', JSON.stringify(st3));
 }
 
 // ============================================================

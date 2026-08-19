@@ -34,7 +34,10 @@ export function buildDecisionMessages(ctx) {
   // Antes el system prompt mencionaba design_altar/design_shelter/etc. aunque no estuvieran disponibles,
   // y el modelo las elegia igual -> fallo de parseo -> fallback heuristico.
   const designInMenu = menu.filter((m) => ['design_shelter', 'design_altar', 'design_fire', 'design_boat'].includes(m.id)).map((m) => m.id);
-  const targetHint = designInMenu.length ? `; para ${designInMenu.join(' o ')}, el nombre del plano elegido` : '';
+  const exploreHint = menu.some((m) => m.id === 'explore')
+    ? '; para explore, tu destino si lo tenes claro (huellas, humo, fruta, ballena, campamento) o null'
+    : '';
+  const targetHint = (designInMenu.length ? `; para ${designInMenu.join(' o ')}, el nombre del plano elegido` : '') + exploreHint;
   const system = `Sos la mente de ${c.name}, un naufrago en una isla. NO sos narrador ni estratega: decidis y hablas como ${c.name}.
 Respondes SOLO un objeto JSON valido, sin markdown ni explicaciones:
 {"action":"<id EXACTO de la lista ACCIONES POSIBLES, ni uno mas ni uno menos>","target":"<nombre de la persona si la accion lo pide${targetHint}; si no null>","say":"<frase corta, max 10 palabras>","think":"<tu pensamiento PRIVADO, max ${thinkMax} palabras, lo que de verdad piensas o sentis y no decis>","goal":"<opcional: un proposito propio para estos dias, max 10 palabras>"}
@@ -116,6 +119,25 @@ Di tu proxima frase. Si ya se dijeron todo, una frase de despedida natural.`;
 }
 
 export function parseDialogue(text) {
+  const j = extractJson(text);
+  const say = j && j.say ? String(j.say).trim() : null;
+  return say && say.length <= 140 ? { say } : null;
+}
+
+// primer encuentro (B10): el saludo lo dice el LLM con el caracter del instructivo
+export function buildMeetingMessages(ctx) {
+  const { speaker, other } = ctx;
+  const gender = (other.appearance && other.appearance.gender === 'f') ? 'una mujer' : 'un hombre';
+  const system = `Sos ${speaker.name}, un naufrago en una isla. Acabas de ver por PRIMERA VEZ a otra persona (${other.name}). Hasta ahora creias estar solo.
+Respondes SOLO JSON: {"say":"<lo que decis EN VOZ ALTA al verle, max 10 palabras, con TU caracter y TU manera de hablar>"}`;
+  const user = `QUIEN SOS: ${speaker.instructivo || 'un naufrago mas'}
+Ves a ${other.name} por primera vez: ${gender} a pocos pasos. No sabes nada de el/ella.
+Tu cuerpo: sed ${Math.round(speaker.needs.water)}/100, hambre ${Math.round(speaker.needs.food)}/100, animo ${Math.round(speaker.mood)}/100.
+Que decis en voz alta?`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+export function parseMeeting(text) {
   const j = extractJson(text);
   const say = j && j.say ? String(j.say).trim() : null;
   return say && say.length <= 140 ? { say } : null;

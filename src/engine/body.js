@@ -86,6 +86,7 @@ export function bodyWords(c) {
   const inv = [];
   if (c.inventory.berries > 0) inv.push(`${c.inventory.berries} bayas`);
   if (c.inventory.fish > 0) inv.push(`${c.inventory.fish} pescado(s)`);
+  if ((c.inventory.dried || 0) > 0) inv.push(`${c.inventory.dried} comida seca (no se pudre)`);
   if (c.inventory.wood > 0) inv.push(`${c.inventory.wood} madera`);
   if (c.inventory.stone > 0) inv.push(`${c.inventory.stone} piedra`);
   return [

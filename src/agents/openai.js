@@ -1,7 +1,8 @@
 // openai.js — provider LLM vía API compatible con OpenAI (NVIDIA NIM, OpenRouter, etc.)
 // Capa robusta: rate limiter por baseUrl, backoff en 429/5xx, parse con reparacion.
 import { buildDecisionMessages, parseDecision, buildDialogueMessages, parseDialogue,
-  buildPleaMessages, parsePlea, buildGodMessages, parseGod, buildRetryMessages } from './brain.js';
+  buildPleaMessages, parsePlea, buildGodMessages, parseGod, buildRetryMessages,
+  buildMeetingMessages, parseMeeting } from './brain.js';
 import { makeLimiter } from './limiter.js';
 
 const lim = makeLimiter({ concurrency: 2, minSpacingMs: 1500 });
@@ -86,6 +87,11 @@ export function createOpenAI({
       const d = parseDecision(await ask(buildRetryMessages(ctx, prevSay), { maxTokens: 1600, temperature: 0.85 }), ctx.menu);
       if (!d || !d.say) throw new Error('retry no parseable');
       return d.say;
+    },
+    async firstMeeting(ctx) {
+      const d = parseMeeting(await ask(buildMeetingMessages(ctx), { maxTokens: 1024, temperature: 0.8 }));
+      if (!d) throw new Error('saludo no parseable');
+      return d;
     },
     async dialogueLine(ctx) {
       const d = parseDialogue(await ask(buildDialogueMessages(ctx), { maxTokens: 1024, temperature: 0.7 }));

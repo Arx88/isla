@@ -1,8 +1,8 @@
 // actions.js — catalogo de acciones + ejecucion determinista (movimiento, recursos, construccion)
-import { passable } from './worldgen.js';
+import { passable, biomeAt, BIOME } from './worldgen.js';
 import { remember, adjustRel, addFact, markPlace, placeChanged } from './memory.js';
 import { clamp } from './util.js';
-import { skillUp, SKILL_NAME, addEmotion } from './body.js';
+import { skillUp, SKILL_NAME, addEmotion, isNight } from './body.js';
 import { designById, unlockedShelterDesigns, costTxt, inProgressShelter,
   sheltersList, nextShelterSpot, progressTxt } from './shelter.js';
 import { fireDesignById, unlockedFireDesigns, fireCostTxt, firesList, inProgressFire,
@@ -18,6 +18,7 @@ export const CATALOG = {
   forage: { name: 'juntar bayas', dur: 6, satisfies: 'food', auto: 'bush' },
   hunt: { name: 'cazar un animal (perseguirlo y matarlo por carne)', dur: 6 },
   fish: { name: 'pescar en la orilla', dur: 10, satisfies: 'food', auto: 'fish' },
+  dry_food: { name: 'secar comida al sol (no se pudre)', dur: 8 },
   gather_wood: { name: 'talar arboles por madera', dur: 8, auto: 'tree' },
   gather_stone: { name: 'juntar piedras', dur: 8, auto: 'stone' },
   build_shelter: { name: 'trabajar en el refugio en obra (1 madera por turno de trabajo)', dur: 4 },
@@ -41,7 +42,7 @@ export const CATALOG = {
   sail_away: { name: 'zarpar de la isla para siempre', dur: 3 },
 };
 
-export function allowedActions(c, per, world) {
+export function allowedActions(c, per, world, sim) {
   const list = [];
   const push = (id, note) => list.push({ id, desc: CATALOG[id].name + (note ? ` (${note})` : '') });
   if (per.cleanWater || per.water) push('drink', per.cleanWater ? 'agua limpia' : 'solo agua de pantano: te puede enfermar');
@@ -57,6 +58,18 @@ export function allowedActions(c, per, world) {
     if (prey.length) push('hunt', prey[0].t === 'boar' ? 'un jabalí (peligroso)' : 'un ' + prey[0].t);
   }
   if (per.fish) push('fish');
+  // secar al sol: ingenio humano (sin milagros). Solo de dia, sin lluvia/niebla, en playa o campamento.
+  // Cuesta energia: tender y vigilar la comida cansa.
+  {
+    const tick = sim ? sim.tick : 100, weather = sim ? sim.weather : 'clear';
+    const w2 = sim ? sim.world : world;
+    const raw = (c.inventory.fish || 0) + (c.inventory.meat || 0);
+    if (raw > 0 && !isNight(tick) && weather !== 'rain' && weather !== 'storm' && weather !== 'fog') {
+      const atCamp = w2.campFounded && Math.hypot(c.pos.x - w2.camp.x, c.pos.y - w2.camp.y) < 8;
+      const atBeach = biomeAt(w2, c.pos.x, c.pos.y) === BIOME.SAND;
+      if (atCamp || atBeach) push('dry_food', weather === 'heat' ? 'el sol de la ola de calor seca en un santiamen' : 'de dia y sin lluvia');
+    }
+  }
   if (per.tree) push('gather_wood');
   if (per.stone) push('gather_stone');
   // ===== refugios: el primero FUNDA el campamento; luego se diseña y se obra plano por plano =====
@@ -127,7 +140,7 @@ export function allowedActions(c, per, world) {
   }
   const near = per.others.filter((o) => o.dist <= 30);
   if (near.length) push('talk', near.map((o) => o.name).join('/'));
-  if (near.length && c.inventory.berries + c.inventory.fish > 1) push('gift', near.map((o) => o.name).join('/'));
+  if (near.length && c.inventory.berries + c.inventory.fish + (c.inventory.dried || 0) > 1) push('gift', near.map((o) => o.name).join('/'));
   const teachables = near.filter((o) => o.ref && (
     c.knownRecipes.some((r) => !o.ref.knownRecipes.includes(r))
     || Object.keys(c.skills).some((k) => c.skills[k] >= 50 && o.ref.skills[k] < c.skills[k] - 15)
@@ -139,11 +152,16 @@ export function allowedActions(c, per, world) {
       || (c.memory.facts || []).some((f) => f.includes('huellas') || f.includes('otra persona') || f.includes('no esta solo'));
     if (knowsOthersExist) push('seek_company', per.others.length ? `ves a ${per.others.map((o) => o.name).join('/')}` : 'no ves a nadie ahora, pero sabes que no estas solo');
   }
-  push('explore');
+  {
+    // B11: las senales a la vista se ofrecen como destinos para explore (las apunta el agente)
+    const WK = { huellas: 'huellas', smoke: 'humo', fruit: 'fruta', whale: 'ballena' };
+    const wkinds = [...new Set((per.wonders || []).map((w) => WK[w.kind] || w.kind))];
+    push('explore', wkinds.length ? 'apunta tu destino: ' + wkinds.join(', ') + ' o campamento' : null);
+  }
   push('rest');
   push('sleep');
   // robar: solo visible al borde de la muerte por hambre, con alguien cerca que tenga comida
-  const robables = near.filter((o) => o.ref && (o.ref.inventory.berries > 0 || o.ref.inventory.fish > 0));
+  const robables = near.filter((o) => o.ref && (o.ref.inventory.berries > 0 || o.ref.inventory.fish > 0 || (o.ref.inventory.dried || 0) > 0));
   if (robables.length && c.needs.food > 88) push('steal', 'traicionar para sobrevivir: ' + robables.map((o) => o.name).join('/'));
   const recipes = c.knownRecipes.filter((r) => r.payable(c));
   if (recipes.length) push('craft', recipes.map((r) => r.name).join('/'));
@@ -332,22 +350,47 @@ export function startAction(sim, c, id, targetRef, openingSay = null) {
     target = { ...best, water: true };
   }
   if (id === 'explore') {
-    // destino PEGAJOSO: si ya venia explorando hacia un lado, sigue ese rumbo (anti ping-pong)
-    const stickyOk = c.stickyExplore && sim.abs < c.stickyExplore.until
-      && Math.hypot(c.stickyExplore.x - c.pos.x, c.stickyExplore.y - c.pos.y) > 2;
-    if (stickyOk) {
-      target = { x: c.stickyExplore.x, y: c.stickyExplore.y, explore: true };
-    } else {
-      const ft = frontierTarget(sim, c);
-      if (ft) {
-        target = { x: ft.x, y: ft.y, explore: true };
-        c.stickyExplore = { x: ft.x, y: ft.y, until: sim.abs + 45 };
+    // B11: el agente puede apuntar un destino (huellas, humo, fruta, ballena, campamento, agua)
+    const t = targetRef ? String(targetRef).trim().toLowerCase() : '';
+    if (t) {
+      const wonders = (sim.world.wonders || []).filter((x) => !x.seen);
+      let w0 = null;
+      if (/huella/.test(t)) w0 = wonders.find((x) => x.kind === 'huellas');
+      else if (/humo/.test(t)) w0 = wonders.find((x) => x.kind === 'smoke');
+      else if (/fruta/.test(t)) w0 = wonders.find((x) => x.kind === 'fruit');
+      else if (/ballena/.test(t)) w0 = wonders.find((x) => x.kind === 'whale');
+      if (w0) {
+        target = { x: w0.x, y: w0.y, explore: true };
+        c.stickyExplore = { x: w0.x, y: w0.y, until: sim.abs + 150 };
+      } else if (/camp/.test(t) && sim.world.campFounded) {
+        target = { x: sim.world.camp.x, y: sim.world.camp.y, explore: true };
+        c.stickyExplore = null;
+      } else if (/agua/.test(t) && c.knownWaters && c.knownWaters.length) {
+        let best = null, bd = 1e9;
+        for (const k of c.knownWaters) { const d = Math.hypot(k.x - c.pos.x, k.y - c.pos.y); if (d < bd) { bd = d; best = k; } }
+        if (best) { target = { x: best.x, y: best.y, explore: true }; c.stickyExplore = null; }
+      }
+    }
+    if (!target) {
+      // destino PEGAJOSO: si ya venia explorando hacia un lado, sigue ese rumbo (anti ping-pong)
+      // (si el destino era una maravilla y otro ya la vio, se abandona)
+      const stickyOk = c.stickyExplore && sim.abs < c.stickyExplore.until
+        && Math.hypot(c.stickyExplore.x - c.pos.x, c.stickyExplore.y - c.pos.y) > 2
+        && !(sim.world.wonders || []).some((x) => x.seen && Math.hypot(x.x - c.stickyExplore.x, x.y - c.stickyExplore.y) < 2);
+      if (stickyOk) {
+        target = { x: c.stickyExplore.x, y: c.stickyExplore.y, explore: true };
       } else {
-        const ang = sim.rng.next() * 6.283, d = 8 + sim.rng.next() * 8;
-        let tx = clampInt(c.pos.x + Math.cos(ang) * d, 1, sim.world.w - 2);
-        let ty = clampInt(c.pos.y + Math.sin(ang) * d, 1, sim.world.h - 2);
-        target = { x: tx, y: ty, explore: true };
-        c.stickyExplore = { x: tx, y: ty, until: sim.abs + 45 };
+        const ft = frontierTarget(sim, c);
+        if (ft) {
+          target = { x: ft.x, y: ft.y, explore: true };
+          c.stickyExplore = { x: ft.x, y: ft.y, until: sim.abs + 45 };
+        } else {
+          const ang = sim.rng.next() * 6.283, d = 8 + sim.rng.next() * 8;
+          let tx = clampInt(c.pos.x + Math.cos(ang) * d, 1, sim.world.w - 2);
+          let ty = clampInt(c.pos.y + Math.sin(ang) * d, 1, sim.world.h - 2);
+          target = { x: tx, y: ty, explore: true };
+          c.stickyExplore = { x: tx, y: ty, until: sim.abs + 45 };
+        }
       }
     }
   }
@@ -542,7 +585,7 @@ async function resolve(sim, c, a) {
     case 'steal': {
       const o = sim.citizens.find((x) => x.id === a.target.citizen);
       if (!o || !o.alive) return finish(sim, c, null, 'busca a quien robarle pero no esta');
-      const took = o.inventory.fish > 0 ? 'fish' : o.inventory.berries > 0 ? 'berries' : null;
+      const took = o.inventory.fish > 0 ? 'fish' : o.inventory.berries > 0 ? 'berries' : ((o.inventory.dried || 0) > 0 ? 'dried' : null);
       if (!took) return finish(sim, c, null, 'intentaba robarle pero no tenia nada');
       o.inventory[took]--; c.inventory[took]++;
       const caught = o.action && o.action.id !== 'sleep' && Math.hypot(o.pos.x - c.pos.x, o.pos.y - c.pos.y) < 6;
@@ -570,6 +613,7 @@ async function resolve(sim, c, a) {
       const mul = (fenv.estrella && fenv.near) ? 2 : 1;
       if ((inv.meat || 0) > 0) { inv.meat--; c.needs.food = clamp(c.needs.food - 48 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'devora carne asada junto a La Estrella: rinde el doble' : 'devora carne asada'); }
       if (inv.fish > 0) { inv.fish--; c.needs.food = clamp(c.needs.food - 45 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'come un pescado sobre la brasa de La Estrella: rinde el doble' : 'come un pescado'); }
+      if ((inv.dried || 0) > 0) { inv.dried--; c.needs.food = clamp(c.needs.food - 38 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'mastica comida seca sobre la brasa de La Estrella: rinde el doble' : 'mastica comida seca: no es un banquete, pero no se pudre'); }
       if (inv.berries > 0) { inv.berries--; c.needs.food = clamp(c.needs.food - 32 * mul, 0, 100); return finish(sim, c, mul > 1 ? 'come bayas al calor de La Estrella: rinden el doble' : 'come bayas'); }
       return finish(sim, c, null, 'busca comida en su mochila... vacia');
     }
@@ -595,6 +639,20 @@ async function resolve(sim, c, a) {
       const wBonus = sim.weather === 'rain' ? 0.12 : sim.weather === 'storm' ? -0.35 : 0;
       if (sim.rng.chance((net ? 0.75 : 0.40) + c.skills.fish / 250 + wBonus)) { inv.fish++; return finish(sim, c, 'pesca un pez'); }
       return finish(sim, c, 'pasa un buen rato pescando... sin suerte');
+    }
+    case 'dry_food': {
+      // re-verificar el sol al terminar: si se cerro el cielo, el esfuerzo se pierde (la comida no)
+      if (isNight(sim.tick) || sim.weather === 'rain' || sim.weather === 'storm' || sim.weather === 'fog') {
+        return finish(sim, c, null, 'el cielo se cerro y no hubo sol para terminar de secar');
+      }
+      if ((inv.fish || 0) > 0) inv.fish--;
+      else if ((inv.meat || 0) > 0) inv.meat--;
+      else return finish(sim, c, null, 'no le queda nada crudo para secar');
+      inv.dried = (inv.dried || 0) + 1;
+      c.needs.energy = clamp(c.needs.energy - 8, 0, 100); // tender y vigilar el secadero cansa
+      return finish(sim, c, sim.weather === 'heat'
+        ? 'tiende la comida al sol de la ola de calor: queda seca para guardar (cuesta energia)'
+        : 'cuelga la comida al sol para que se conserve (cuesta energia)');
     }
     case 'gather_wood': {
       const t = a.target;
@@ -1000,7 +1058,7 @@ async function resolve(sim, c, a) {
     case 'gift': {
       const o = sim.citizens.find((x) => x.id === a.target.citizen);
       if (!o || !o.alive) return finish(sim, c, null, 'no encuentra a quien le queria regalar');
-      if (inv.fish > 0) { inv.fish--; o.inventory.fish++; } else if (inv.berries > 0) { inv.berries--; o.inventory.berries++; }
+      if (inv.fish > 0) { inv.fish--; o.inventory.fish++; } else if (inv.berries > 0) { inv.berries--; o.inventory.berries++; } else if ((inv.dried || 0) > 0) { inv.dried--; o.inventory.dried = (o.inventory.dried || 0) + 1; }
       else return finish(sim, c, null, 'queria regalar comida pero no le queda');
       adjustRel(o, c.id, +12, `${c.name} le regalo comida`);
       adjustRel(c, o.id, +4, `le regalo comida a ${o.name}`);

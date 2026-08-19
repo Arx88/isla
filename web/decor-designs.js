@@ -23,6 +23,7 @@
       set(t, k, v) { if (k in t) t[k] = v; else c[k] = v; return true; },
     });
   }
+  function h2(i, k) { const s = Math.sin(i * 127.1 + (k || 0) * 311.7) * 43758.5453; return s - Math.floor(s); }
   function hs(o, i, k) { const s = Math.sin((o.seed || 0) * 17.31 + i * 127.1 + (k || 0) * 311.7) * 43758.5453; return s - Math.floor(s); }
   function gShadow(o, x, y, w) { o.ctx.fillStyle = 'rgba(0,0,0,.22)'; o.ctx.beginPath(); o.ctx.ellipse(x, y, w, w * 0.3, 0, 0, TAU); o.ctx.fill(); }
   function glow(o, x, y, r, triple, a) {
@@ -585,30 +586,30 @@
     o.px(cx + z * 0.24, gy - z * 0.04, z * 0.12, o.g, '#4d7a46');
     o.px(cx - z * 0.2, gy - z * 0.08, o.g * 2, o.g * 2, ST.lt); // guijarro
   }
-// ===== catálogo =====
+  // ===== catálogo =====
   const AGUA = [
-    { id: 'pozo', name: 'Pozo de piedra', icon: '🕳️', desc: 'muro de piedra, manivela y balde que sube' },
+    { id: 'pozo', name: 'Pozo de piedra', icon: '🕳️', desc: 'muro de piedras trabadas, eje con manivela, balde que sube goteando · agua con brillo y pajarito bebiendo' },
   ].map((d) => ({ ...d, paint: b_pozo, bgc: '#8fa05e' }));
   const COMIDA = [
-    { id: 'rackpez', name: 'Rack de pescado', icon: '🐟', desc: 'pescados secándose al sol en el caballete' },
-    { id: 'horno', name: 'Horno de barro', icon: '🏺', desc: 'domo de adobe con fuego vivo y pan dorado' },
-    { id: 'huerto', name: 'Huerto', icon: '🌱', desc: 'surcos vistos desde arriba con hileras que brotan' },
-  ].map((d) => ({ ...d, paint: { rackpez: b_rackpez, horno: b_horno, huerto: b_huerto }[d.id], bgc: '#8fa05e' }));
+    { id: 'rackpez', name: 'Rack de pescado', icon: '🐟', desc: 'caballete en la playa: 6 pescados en distinto punto de secado, salmuera que gotea, moscas y canasto de descartes' },
+    { id: 'horno', name: 'Horno de barro', icon: '🏺', desc: 'domo de adobe con hiladas, grietas y hollin · fuego vivo en la boca, chispas, pan con corteza y pala' },
+    { id: 'huerto', name: 'Huerto', icon: '🌱', desc: 'surcos en vista superior con lomo y sombra, plantas en 4 etapas de brote, cerca de estacas y mariposa' },
+  ].map((d) => ({ ...d, paint: { rackpez: b_rackpez, horno: b_horno, huerto: b_huerto }[d.id], bgc: { rackpez: '#d8c49a', horno: '#9c8a5e', huerto: '#8fa05e' }[d.id] }));
   const OFICIO = [
-    { id: 'banco', name: 'Banco de trabajo', icon: '🪚', desc: 'mesa de carpintero con herramientas y virutas' },
-    { id: 'hilado', name: 'Ruleta de hilado', icon: '🪡', desc: 'rueda que gira, banda y huso tensando el hilo' },
-    { id: 'telar', name: 'Telar', icon: '🧶', desc: 'bastidor vertical con urdimbre y tela que crece' },
-  ].map((d) => ({ ...d, paint: { banco: b_banco, hilado: b_hilado, telar: b_telar }[d.id], bgc: '#8fa05e' }));
+    { id: 'banco', name: 'Banco de trabajo', icon: '🪚', desc: 'mesa de carpintero con veta, tornillo de banco, hacha/martillo/serrucho, virutas y pieza tallandose' },
+    { id: 'hilado', name: 'Rueca de hilado', icon: '🪡', desc: 'rueda de 6 rayos que gira, banda al pedal, huso tensando el hilo vibrante, canasto y ovillos' },
+    { id: 'telar', name: 'Telar', icon: '🧶', desc: 'bastidor vertical, urdimbre que vibra, peine doble, tela a franjas que crece y lanzadera que cruza' },
+  ].map((d) => ({ ...d, paint: { banco: b_banco, hilado: b_hilado, telar: b_telar }[d.id], bgc: { banco: '#a89878', hilado: '#8fa05e', telar: '#8fa05e' }[d.id] }));
   const CAMP = [
-    { id: 'lenera', name: 'Leñero', icon: '🪵', desc: 'cobertizo de tablas con troncos apilados y hacha' },
-    { id: 'hamaca', name: 'Hamaca', icon: '🛝', desc: 'hamaca rayada entre dos troncos, con vaivén suave' },
-    { id: 'farol', name: 'Farol de poste', icon: '🏮', desc: 'farolito colgante que oscila y alumbra el suelo' },
-    { id: 'baul', name: 'Baúl de provisiones', icon: '🧰', desc: 'baúl con refuerzos, tapa entreabierta y oro' },
-  ].map((d) => ({ ...d, paint: { lenera: b_lenera, hamaca: b_hamaca, farol: b_farol, baul: b_baul }[d.id], bgc: '#8fa05e' }));
+    { id: 'lenera', name: 'Leñero', icon: '🪵', desc: 'cobertizo a dos aguas con troncos de anillos, hacha clavada al tajo, corteza y virutas al piso' },
+    { id: 'hamaca', name: 'Hamaca', icon: '🛝', desc: 'tela rayada entre dos horquillas, soga tensa, vaiven suave, almohadita y hojas que caen' },
+    { id: 'farol', name: 'Farol de poste', icon: '🏮', desc: 'farolito colgante que oscila, llama viva con halo, charco de luz tibia y polillas · noche' },
+    { id: 'baul', name: 'Baúl de provisiones', icon: '🧰', desc: 'duelas y refuerzos de hierro, tapa entreabierta: el oro brilla, polvo dorado sube y destellos' },
+  ].map((d) => ({ ...d, paint: { lenera: b_lenera, hamaca: b_hamaca, farol: b_farol, baul: b_baul }[d.id], bgc: { lenera: '#6e8a4e', hamaca: '#8fa05e', farol: '#3a4a3e', baul: '#d8c49a' }[d.id] }));
   const MAR_NOCHE = [
-    { id: 'antorcha', name: 'Antorcha', icon: '🔥', desc: 'llama grande de cinco lenguas con chispas' },
-    { id: 'bandera', name: 'Bandera de señales', icon: '🚩', desc: 'asta alta con tela roja que flamea en ráfagas' },
-  ].map((d) => ({ ...d, paint: { antorcha: n_antorcha, bandera: m_bandera }[d.id], bgc: '#8fa05e' }));
+    { id: 'antorcha', name: 'Antorcha', icon: '🔥', desc: 'llama grande de cinco lenguas con chispas que suben, humo y rescoldo en el piso · noche' },
+    { id: 'bandera', name: 'Bandera de señales', icon: '🚩', desc: 'asta con remate dorado, driza, tela roja flameando en rafagas con insignia' },
+  ].map((d) => ({ ...d, paint: { antorcha: n_antorcha, bandera: m_bandera }[d.id], bgc: { antorcha: '#2e3844', bandera: '#d8c49a' }[d.id] }));
 
   const CATALOG = [
     { name: 'AGUA', id: 'gAgua', items: AGUA },
@@ -622,39 +623,105 @@
   window.DECOR = { CATALOG, ALL };
 
   // ===== tarjetas =====
+  // fondo vivo por pieza: piso con dither, matas de pasto/hierba segun bioma, vineta suave.
+  // El seed es estable: misma pieza = mismo escenario, sin parpadeo.
+  function drawBackdrop(ctx, W, H, gy, bgc, seed) {
+    ctx.fillStyle = bgc; ctx.fillRect(0, 0, W, H);
+    const gg = bgc === '#d8c49a' || bgc === '#cfb98a'; // arena?
+    const rgb = [parseInt(bgc.slice(1, 3), 16), parseInt(bgc.slice(3, 5), 16), parseInt(bgc.slice(5, 7), 16)];
+    const lum = rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11;
+    const night = lum < 78; // pieza de noche: la luz de la pieza importa
+    for (let i = 0; i < 90; i++) { // dither de suelo
+      const h1 = h2(i, seed + 101), h2v = h2(i, seed + 103);
+      ctx.fillStyle = i % 3 ? (night ? 'rgba(0,0,0,.18)' : 'rgba(0,0,0,.07)') : 'rgba(255,255,255,.06)';
+      ctx.fillRect(h1 * W, h2v * H, 3, 3);
+    }
+    if (gg) { // arena: conchitas y ondulaciones
+      for (let i = 0; i < 8; i++) {
+        const sx = h2(i, seed + 7) * W, sy = gy - 40 + h2(i, seed + 13) * (H - gy + 34);
+        ctx.fillStyle = i % 2 ? 'rgba(255,244,214,.5)' : 'rgba(120,95,60,.22)';
+        ctx.fillRect(sx, sy, i % 3 ? 4 : 2, 2);
+      }
+      for (let i = 0; i < 5; i++) { // huellas de viento
+        const sx = h2(i, seed + 29) * W, sy = gy - 30 + h2(i, seed + 31) * (H - gy + 24);
+        ctx.fillStyle = 'rgba(0,0,0,.05)';
+        ctx.fillRect(sx, sy, 26 + h2(i, seed + 37) * 20, 2);
+      }
+    } else { // pasto: matas y flores diminutas
+      for (let i = 0; i < 30; i++) {
+        const sx = h2(i, seed + 21) * W, sy = gy - 26 + h2(i, seed + 23) * (H - gy + 20);
+        ctx.fillStyle = night ? 'rgba(10,24,12,.4)' : (i % 4 ? 'rgba(30,60,20,.25)' : 'rgba(150,210,110,.4)');
+        ctx.fillRect(sx, sy, 2, 5);
+        ctx.fillRect(sx + 3, sy + 1, 2, 4);
+        ctx.fillRect(sx - 3, sy + 2, 2, 3);
+      }
+      if (!night) {
+        for (let i = 0; i < 5; i++) { // florecitas
+          const sx = h2(i, seed + 41) * W, sy = gy - 20 + h2(i, seed + 43) * (H - gy + 14);
+          ctx.fillStyle = ['#e8d060', '#e8a0c0', '#f0f0e0'][i % 3];
+          ctx.fillRect(sx, sy, 2, 2);
+        }
+      } else { // luciernagas quietas (fondo estatico)
+        for (let i = 0; i < 4; i++) {
+          const sx = h2(i, seed + 47) * W, sy = 40 + h2(i, seed + 53) * (gy - 120);
+          ctx.fillStyle = 'rgba(198,255,120,.5)';
+          ctx.fillRect(sx, sy, 2, 2);
+          ctx.fillStyle = 'rgba(198,255,120,.14)';
+          ctx.fillRect(sx - 3, sy - 3, 8, 8);
+        }
+      }
+    }
+    ctx.fillStyle = night ? 'rgba(0,0,0,.22)' : 'rgba(0,0,0,.10)';
+    ctx.fillRect(0, gy + 6, W, H - gy - 6); // plano de contacto
+    const gr = ctx.createLinearGradient(0, H - 60, 0, H);
+    gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, night ? 'rgba(2,4,8,.55)' : 'rgba(8,12,6,.35)');
+    ctx.fillStyle = gr; ctx.fillRect(0, H - 60, W, 60);
+    const gl = ctx.createLinearGradient(0, 0, 0, 70);
+    gl.addColorStop(0, night ? 'rgba(120,150,200,.10)' : 'rgba(255,255,255,.12)');
+    gl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gl; ctx.fillRect(0, 0, W, 70);
+  }
+
   const makeCards = () => {
     document.querySelectorAll('.card-decor').forEach((c) => c.remove());
-    const art = document.getElementById('artDeco') || document.body;
-    CATALOG.forEach((g) => {
-      g.items.forEach((it, i) => {
+    const scenes = [];
+    CATALOG.forEach((grp) => {
+      const grid = document.getElementById(grp.id);
+      if (!grid) return;
+      grp.items.forEach((it, i) => {
         const card = document.createElement('div');
         card.className = 'card-decor';
         const cv = document.createElement('canvas');
         cv.width = 400; cv.height = 330;
-        const ctx = cv.getContext('2d');
-        const seed = (g.id + it.id).split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-        let t = 0, last = performance.now();
-        const draw = (now) => {
-          const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
-          ctx.clearRect(0, 0, 400, 330);
-          const o = new Proxy({ g: 6, ctx, t, seed }, { get: (tgt, k) => k in tgt ? tgt[k] : ctx[k] });
-          const sand = 110, cx = 200, gy = 262, z = 88;
-          ctx.fillStyle = '#d8c49a'; ctx.fillRect(0, 0, 400, 330);
-          ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fillRect(0, 0, 400, sand);
+        const g2 = cv.getContext('2d');
+        g2.imageSmoothingEnabled = false;
+        const seed = (grp.id + it.id).split('').reduce((a, c) => a + c.charCodeAt(0), 0) + i * 13;
+        const W = 400, H = 330, cx = W / 2, gy = 262, z = 88;
+        scenes.push((t) => {
+          g2.clearRect(0, 0, W, H);
+          drawBackdrop(g2, W, H, gy, it.bgc, seed);
+          const o = painter(g2, z); // helpers px/ell/tri/line + passthrough al canvas
+          o.t = t; o.seed = seed;
           it.paint(o, cx, gy, z);
-          ctx.font = '26px serif'; ctx.textAlign = 'center';
-          ctx.fillStyle = '#2d2418';
-          ctx.fillText(it.icon, 200, 42);
-          requestAnimationFrame(draw);
-        };
-        requestAnimationFrame(draw);
+          g2.font = '26px serif'; g2.textAlign = 'center';
+          g2.fillStyle = '#2d2418';
+          g2.fillText(it.icon, W / 2, 42);
+          g2.textAlign = 'left';
+        });
         const info = document.createElement('div');
         info.className = 'card-info';
         info.innerHTML = `<b>${it.name}</b><span>${it.desc}</span>`;
         card.append(cv, info);
-        art.appendChild(card);
+        grid.appendChild(card);
       });
     });
+    const t0 = performance.now();
+    const loop = (now) => {
+      const t = (now - t0) / 1000;
+      for (const s of scenes) s(t);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
   };
 
   if (typeof document !== 'undefined' && document.readyState === 'loading') document.addEventListener('DOMContentLoaded', makeCards);
